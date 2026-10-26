@@ -7,6 +7,18 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+bytes.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["http1", "server-graceful", "tokio"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+tokio = { workspace = true, features = ["io-util", "sync"] }
 
 [lints]
 workspace = true

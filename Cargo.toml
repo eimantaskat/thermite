@@ -11,6 +11,15 @@ repository = "https://github.com/eimantaskat/thermite"
 
 [workspace.dependencies]
 thermite-core = { path = "crates/thermite-core" }
+bytes = "1.12.1"
+http = "1.5.0"
+http-body-util = "0.1.5"
+hyper = { version = "1.12.0", default-features = false }
+hyper-util = { version = "0.1.21", default-features = false }
+reqwest = { version = "0.13.5", default-features = false }
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", default-features = false }
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
@@ -25,3 +34,6 @@ todo = "deny"
 dbg_macro = "deny"
 print_stdout = "deny"
 module_name_repetitions = "allow"
+# turned back on with missing_docs in the doc comment pass
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
