@@ -17,6 +17,7 @@ tokio = { workspace = true, features = ["macros", "net", "rt", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
+proptest.workspace = true
 reqwest.workspace = true
 tokio = { workspace = true, features = ["io-util", "sync"] }
 

@@ -1,67 +1,17 @@
-use std::error::Error;
 use std::future::pending;
 use std::io;
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
 use http::{HeaderValue, StatusCode};
-use thermite_core::{Request, RequestHandler, Response, Server, ServerError};
+use thermite_core::{Request, Response, Server, ServerError};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::{Barrier, Notify, oneshot};
-use tokio::task::JoinHandle;
+use tokio::sync::{Barrier, Notify};
 use tokio::time::timeout;
 
-type TestResult = Result<(), Box<dyn Error>>;
-
-const TEST_TIMEOUT: Duration = Duration::from_secs(5);
-
-struct RunningServer {
-    address: SocketAddr,
-    shutdown: oneshot::Sender<()>,
-    task: JoinHandle<()>,
-}
-
-impl RunningServer {
-    async fn start(handler: impl RequestHandler) -> Result<Self, ServerError> {
-        Self::start_configured(|server| server, handler).await
-    }
-
-    async fn start_configured(
-        configure: impl FnOnce(Server) -> Server,
-        handler: impl RequestHandler,
-    ) -> Result<Self, ServerError> {
-        let server = configure(Server::bind("127.0.0.1:0").await?);
-        let address = server.local_address()?;
-        let (shutdown, shutdown_signal) = oneshot::channel::<()>();
-        let task = tokio::spawn(server.serve_with_shutdown(handler, async {
-            let _ = shutdown_signal.await;
-        }));
-        Ok(Self {
-            address,
-            shutdown,
-            task,
-        })
-    }
-
-    fn url(&self, path: &str) -> String {
-        format!("http://{}{path}", self.address)
-    }
-
-    async fn stop(self) -> TestResult {
-        let _ = self.shutdown.send(());
-        timeout(TEST_TIMEOUT, self.task).await??;
-        Ok(())
-    }
-}
-
-fn text_response(status: StatusCode, body: &'static str) -> Response {
-    let mut response = Response::new(Bytes::from_static(body.as_bytes()));
-    *response.status_mut() = status;
-    response
-}
+use crate::support::{RunningServer, TEST_TIMEOUT, TestResult, send_raw, text_response};
 
 #[tokio::test]
 async fn returns_the_response_built_by_the_handler() -> TestResult {
@@ -163,15 +113,6 @@ async fn returns_400_when_the_request_is_not_http() -> TestResult {
         "unexpected response: {response}"
     );
     server.stop().await
-}
-
-async fn send_raw(address: SocketAddr, request: &[u8]) -> Result<String, Box<dyn Error>> {
-    let mut stream = TcpStream::connect(address).await?;
-    stream.write_all(request).await?;
-    stream.shutdown().await?;
-    let mut response = String::new();
-    timeout(TEST_TIMEOUT, stream.read_to_string(&mut response)).await??;
-    Ok(response)
 }
 
 #[tokio::test]
@@ -293,7 +234,7 @@ async fn keeps_serving_after_a_handler_panics() -> TestResult {
 }
 
 #[tokio::test]
-async fn stops_accepting_connections_after_shutting_down() -> TestResult {
+async fn releases_its_port_after_shutting_down() -> TestResult {
     let server =
         RunningServer::start(|_request: Request| async { text_response(StatusCode::OK, "") })
             .await?;
@@ -301,8 +242,8 @@ async fn stops_accepting_connections_after_shutting_down() -> TestResult {
 
     server.stop().await?;
 
-    let connection = TcpStream::connect(address).await;
-    assert!(connection.is_err(), "connected after shutdown");
+    // binding again proves the listener is gone, while a refused connect takes 2 s on Windows
+    Server::bind(address).await?;
     Ok(())
 }
 
