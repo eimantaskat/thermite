@@ -2,18 +2,30 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
-use super::error::RouteError;
+use crate::percent::percent_decode;
+use crate::route_error::RouteError;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PathParameters(Vec<(String, String)>);
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct PathParameters(Vec<(String, String)>);
 
 impl PathParameters {
-    #[must_use]
-    pub fn get(&self, name: &str) -> Option<&str> {
+    pub(crate) fn get(&self, name: &str) -> Option<&str> {
         self.0
             .iter()
             .find(|(parameter, _)| parameter == name)
             .map(|(_, value)| value.as_str())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_pairs<'pair>(
+        pairs: impl IntoIterator<Item = (&'pair str, &'pair str)>,
+    ) -> Self {
+        Self(
+            pairs
+                .into_iter()
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .collect(),
+        )
     }
 }
 
@@ -99,6 +111,14 @@ impl PathPattern {
         &self.path
     }
 
+    pub(crate) fn has_parameter(&self, name: &str) -> bool {
+        self.parameter_names().any(|parameter| parameter == name)
+    }
+
+    pub(crate) fn parameter_names(&self) -> impl Iterator<Item = &str> {
+        self.segments.iter().filter_map(Segment::parameter_name)
+    }
+
     pub(crate) fn matches(&self, segments: &[Cow<'_, str>]) -> bool {
         self.segments.len() == segments.len()
             && self
@@ -157,42 +177,13 @@ pub(crate) fn decoded_segments(path: &str) -> Vec<Cow<'_, str>> {
         .collect()
 }
 
-// lenient like Python's urllib.parse.unquote: bad escapes stay as they are, bad UTF-8 becomes U+FFFD
-fn percent_decode(text: &str) -> Cow<'_, str> {
-    if !text.contains('%') {
-        return Cow::Borrowed(text);
-    }
-    let mut decoded = Vec::with_capacity(text.len());
-    let mut rest = text.as_bytes();
-    while let Some((&byte, tail)) = rest.split_first() {
-        if byte == b'%'
-            && let [high, low, after @ ..] = tail
-            && let (Some(high), Some(low)) = (hex_value(*high), hex_value(*low))
-        {
-            decoded.push((high << 4) | low);
-            rest = after;
-        } else {
-            decoded.push(byte);
-            rest = tail;
-        }
-    }
-    Cow::Owned(String::from_utf8_lossy(&decoded).into_owned())
-}
-
-fn hex_value(byte: u8) -> Option<u8> {
-    char::from(byte)
-        .to_digit(16)
-        .and_then(|digit| u8::try_from(digit).ok())
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use std::fmt::Write;
-
     use proptest::prelude::*;
 
     use super::*;
+    use crate::percent::encode_every_byte;
 
     fn pattern(path: &str) -> PathPattern {
         PathPattern::parse(path).unwrap()
@@ -203,13 +194,6 @@ mod tests {
         pattern
             .matches(&segments)
             .then(|| pattern.parameters(&segments))
-    }
-
-    fn encode_every_byte(text: &str) -> String {
-        text.bytes().fold(String::new(), |mut encoded, byte| {
-            write!(encoded, "%{byte:02X}").unwrap();
-            encoded
-        })
     }
 
     #[test]
@@ -260,14 +244,6 @@ mod tests {
         assert!(match_path(&encoded, "/a%20b/%7Bid%7D").is_some());
         assert!(match_path(&encoded, "/a%2520b/%7Bid%7D").is_none());
         assert!(encoded.matches_same_paths_as(&pattern("/a b/%7bid%7d")));
-    }
-
-    #[test]
-    fn keeps_malformed_escapes_as_they_are() {
-        assert_eq!(percent_decode("100%"), "100%");
-        assert_eq!(percent_decode("%zz%4"), "%zz%4");
-        assert_eq!(percent_decode("%+1"), "%+1");
-        assert_eq!(percent_decode("%FF"), "\u{FFFD}");
     }
 
     #[test]
@@ -331,17 +307,6 @@ mod tests {
     }
 
     proptest! {
-        #[test]
-        fn decoding_reverses_percent_encoding(text in any::<String>()) {
-            let encoded = encode_every_byte(&text);
-            prop_assert_eq!(percent_decode(&encoded), text);
-        }
-
-        #[test]
-        fn text_without_escapes_is_borrowed_unchanged(text in "[^%]*") {
-            prop_assert!(matches!(percent_decode(&text), Cow::Borrowed(borrowed) if borrowed == text));
-        }
-
         #[test]
         fn a_parameter_captures_any_encoded_segment(value in ".+") {
             let path = format!("/items/{}", encode_every_byte(&value));

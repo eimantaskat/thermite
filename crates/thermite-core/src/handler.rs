@@ -3,6 +3,8 @@ use std::pin::Pin;
 
 use bytes::Bytes;
 
+use crate::arguments::Arguments;
+
 pub type Request = http::Request<Bytes>;
 pub type Response = http::Response<Bytes>;
 
@@ -20,16 +22,35 @@ where
     }
 }
 
+pub trait RouteHandler: Send + Sync + 'static {
+    fn call(&self, request: Request, arguments: Arguments)
+    -> impl Future<Output = Response> + Send;
+}
+
+impl<Function, Output> RouteHandler for Function
+where
+    Function: Fn(Request, Arguments) -> Output + Send + Sync + 'static,
+    Output: Future<Output = Response> + Send,
+{
+    fn call(
+        &self,
+        request: Request,
+        arguments: Arguments,
+    ) -> impl Future<Output = Response> + Send {
+        self(request, arguments)
+    }
+}
+
 pub(crate) type BoxedResponseFuture<'handler> =
     Pin<Box<dyn Future<Output = Response> + Send + 'handler>>;
 
-// RequestHandler returns impl Future, which rules out dyn RequestHandler, so storage goes through this
+// RouteHandler returns impl Future, which rules out dyn RouteHandler, so storage goes through this
 pub(crate) trait Endpoint: Send + Sync + 'static {
-    fn call_boxed(&self, request: Request) -> BoxedResponseFuture<'_>;
+    fn call_boxed(&self, request: Request, arguments: Arguments) -> BoxedResponseFuture<'_>;
 }
 
-impl<Handler: RequestHandler> Endpoint for Handler {
-    fn call_boxed(&self, request: Request) -> BoxedResponseFuture<'_> {
-        Box::pin(self.call(request))
+impl<Handler: RouteHandler> Endpoint for Handler {
+    fn call_boxed(&self, request: Request, arguments: Arguments) -> BoxedResponseFuture<'_> {
+        Box::pin(self.call(request, arguments))
     }
 }

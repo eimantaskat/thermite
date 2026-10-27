@@ -1,34 +1,44 @@
 use bytes::Bytes;
 use http::{Method, StatusCode};
-use thermite_core::{PathParameters, Request, RequestHandler, Response, RouteError, Router};
+use thermite_core::{
+    Arguments, Parameter, Request, Response, RouteDescription, RouteError, RouteHandler, Router,
+    Schema,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
 use crate::support::{RunningServer, TEST_TIMEOUT, TestResult, text_response};
 
-fn answering(body: &'static str) -> impl RequestHandler {
-    move |_request: Request| async move { text_response(StatusCode::OK, body) }
+fn answering(body: &'static str) -> impl RouteHandler {
+    move |_request: Request, _arguments: Arguments| async move { text_response(StatusCode::OK, body) }
 }
 
-fn echoing_parameter(name: &'static str) -> impl RequestHandler {
-    move |request: Request| async move {
-        let value = request
-            .extensions()
-            .get::<PathParameters>()
-            .and_then(|parameters| parameters.get(name))
+fn echoing_parameter(name: &'static str) -> impl RouteHandler {
+    move |_request: Request, arguments: Arguments| async move {
+        let value = arguments
+            .path(name)
+            .and_then(|value| value.as_str())
             .unwrap_or("<missing>")
             .to_owned();
         Response::new(Bytes::from(value))
     }
 }
 
+fn described(method: Method, path: &str) -> RouteDescription {
+    RouteDescription::new(method, path)
+}
+
+fn with_text_parameter(method: Method, path: &str, name: &str) -> RouteDescription {
+    RouteDescription::new(method, path).parameter(Parameter::path(name, Schema::string()))
+}
+
 #[tokio::test]
 async fn dispatches_requests_by_method_and_path() -> TestResult {
     let router = Router::new()
-        .route(Method::GET, "/items", answering("list"))?
-        .route(Method::POST, "/items", answering("create"))?
-        .route(Method::GET, "/users", answering("users"))?;
+        .route(described(Method::GET, "/items"), answering("list"))?
+        .route(described(Method::POST, "/items"), answering("create"))?
+        .route(described(Method::GET, "/users"), answering("users"))?;
     let server = RunningServer::start(router).await?;
     let client = reqwest::Client::new();
 
@@ -45,8 +55,7 @@ async fn dispatches_requests_by_method_and_path() -> TestResult {
 #[tokio::test]
 async fn passes_decoded_path_parameters_to_the_handler() -> TestResult {
     let router = Router::new().route(
-        Method::GET,
-        "/items/{item_id}",
+        with_text_parameter(Method::GET, "/items/{item_id}", "item_id"),
         echoing_parameter("item_id"),
     )?;
     let server = RunningServer::start(router).await?;
@@ -59,7 +68,7 @@ async fn passes_decoded_path_parameters_to_the_handler() -> TestResult {
 
 #[tokio::test]
 async fn returns_404_in_fastapi_format_when_no_route_matches() -> TestResult {
-    let router = Router::new().route(Method::GET, "/items", answering("list"))?;
+    let router = Router::new().route(described(Method::GET, "/items"), answering("list"))?;
     let server = RunningServer::start(router).await?;
 
     for path in ["/users", "/items/", "/items/5"] {
@@ -75,8 +84,8 @@ async fn returns_404_in_fastapi_format_when_no_route_matches() -> TestResult {
 #[tokio::test]
 async fn returns_405_with_the_allowed_methods_when_only_the_method_differs() -> TestResult {
     let router = Router::new()
-        .route(Method::GET, "/items", answering("list"))?
-        .route(Method::POST, "/items", answering("create"))?;
+        .route(described(Method::GET, "/items"), answering("list"))?
+        .route(described(Method::POST, "/items"), answering("create"))?;
     let server = RunningServer::start(router).await?;
 
     let response = reqwest::Client::new()
@@ -95,11 +104,13 @@ async fn returns_405_with_the_allowed_methods_when_only_the_method_differs() -> 
 async fn a_literal_route_wins_over_a_parameter_route_registered_before_it() -> TestResult {
     let router = Router::new()
         .route(
-            Method::GET,
-            "/users/{user_id}",
+            with_text_parameter(Method::GET, "/users/{user_id}", "user_id"),
             echoing_parameter("user_id"),
         )?
-        .route(Method::GET, "/users/me", answering("current user"))?;
+        .route(
+            described(Method::GET, "/users/me"),
+            answering("current user"),
+        )?;
     let server = RunningServer::start(router).await?;
 
     let me = reqwest::get(server.url("/users/me")).await?;
@@ -113,10 +124,12 @@ async fn a_literal_route_wins_over_a_parameter_route_registered_before_it() -> T
 #[tokio::test]
 async fn falls_back_to_a_parameter_route_that_accepts_the_method() -> TestResult {
     let router = Router::new()
-        .route(Method::GET, "/users/me", answering("current user"))?
         .route(
-            Method::DELETE,
-            "/users/{user_id}",
+            described(Method::GET, "/users/me"),
+            answering("current user"),
+        )?
+        .route(
+            with_text_parameter(Method::DELETE, "/users/{user_id}", "user_id"),
             echoing_parameter("user_id"),
         )?;
     let server = RunningServer::start(router).await?;
@@ -132,7 +145,7 @@ async fn falls_back_to_a_parameter_route_that_accepts_the_method() -> TestResult
 
 #[tokio::test]
 async fn answers_head_from_a_get_route_without_sending_the_body() -> TestResult {
-    let router = Router::new().route(Method::GET, "/items", answering("list"))?;
+    let router = Router::new().route(described(Method::GET, "/items"), answering("list"))?;
     let server = RunningServer::start(router).await?;
 
     let mut stream = TcpStream::connect(server.address).await?;
@@ -156,11 +169,20 @@ async fn answers_head_from_a_get_route_without_sending_the_body() -> TestResult 
 #[test]
 fn rejects_a_route_matching_the_same_requests_as_an_existing_one() -> TestResult {
     let router = Router::new()
-        .route(Method::GET, "/items/{item_id}", answering("get"))?
-        .route(Method::DELETE, "/items/{name}", answering("delete"))?;
+        .route(
+            with_text_parameter(Method::GET, "/items/{item_id}", "item_id"),
+            answering("get"),
+        )?
+        .route(
+            with_text_parameter(Method::DELETE, "/items/{name}", "name"),
+            answering("delete"),
+        )?;
 
     let error = router
-        .route(Method::GET, "/items/{name}", answering("again"))
+        .route(
+            with_text_parameter(Method::GET, "/items/{name}", "name"),
+            answering("again"),
+        )
         .err();
 
     assert_eq!(
@@ -178,13 +200,13 @@ fn rejects_a_route_matching_the_same_requests_as_an_existing_one() -> TestResult
 fn route_errors_name_the_offending_path() {
     let messages = ["items", "/items/{id", "/{id}/{id}"].map(|path| {
         Router::new()
-            .route(Method::GET, path, answering(""))
+            .route(described(Method::GET, path), answering(""))
             .err()
             .map(|error| error.to_string())
     });
     let conflict = Router::new()
-        .route(Method::GET, "/items", answering(""))
-        .and_then(|router| router.route(Method::GET, "/items", answering("")))
+        .route(described(Method::GET, "/items"), answering(""))
+        .and_then(|router| router.route(described(Method::GET, "/items"), answering("")))
         .err()
         .map(|error| error.to_string());
 
