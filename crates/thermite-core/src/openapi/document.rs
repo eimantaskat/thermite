@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use super::OpenApi;
-use crate::description::{Parameter, ParameterLocation};
+use crate::description::Parameter;
 use crate::router::{Operation, Router};
 use crate::schema::{Components, JsonSchema, NameConflict, entries, title};
 
@@ -53,11 +53,7 @@ fn describe<'router>(
     described.insert("operationId".to_owned(), operation_id(operation).into());
     let mut parameters: Vec<&Parameter> = operation.parameters.iter().collect();
     // stable, so parameters of one location keep the order the route reads them in
-    parameters.sort_by_key(|parameter| {
-        ParameterLocation::IN_ORDER
-            .iter()
-            .position(|location| *location == parameter.location())
-    });
+    parameters.sort_by_key(|parameter| parameter.location().rank());
     let parameters = parameters
         .into_iter()
         .map(|parameter| describe_parameter(parameter, components))

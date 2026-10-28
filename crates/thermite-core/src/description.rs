@@ -99,7 +99,14 @@ pub enum ParameterLocation {
 
 impl ParameterLocation {
     // FastAPI reports errors and lists parameters by location in this order, whatever the declaration order
-    pub(crate) const IN_ORDER: [Self; 4] = [Self::Path, Self::Query, Self::Header, Self::Cookie];
+    pub(crate) fn rank(self) -> u8 {
+        match self {
+            Self::Path => 0,
+            Self::Query => 1,
+            Self::Header => 2,
+            Self::Cookie => 3,
+        }
+    }
 
     pub(crate) fn as_str(self) -> &'static str {
         match self {

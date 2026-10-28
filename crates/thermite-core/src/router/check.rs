@@ -57,11 +57,7 @@ fn flatten(declarations: Declarations, path: &str, inputs: &mut Inputs) -> Resul
     for dependency in dependencies {
         flatten(dependency, path, inputs)?;
     }
-    parameters.sort_by_key(|parameter| {
-        ParameterLocation::IN_ORDER
-            .iter()
-            .position(|location| *location == parameter.location())
-    });
+    parameters.sort_by_key(|parameter| parameter.location().rank());
     let mut own = HashSet::new();
     for parameter in parameters {
         let duplicate = || RouteError::DuplicateDeclaration {
