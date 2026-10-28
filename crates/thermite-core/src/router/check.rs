@@ -5,14 +5,6 @@ use crate::description::{Body, Declarations, Parameter, ParameterLocation, Route
 use crate::route_error::RouteError;
 use crate::schema::Schema;
 
-// FastAPI reports errors by location in this order, whatever the declaration order
-const LOCATIONS: [ParameterLocation; 4] = [
-    ParameterLocation::Path,
-    ParameterLocation::Query,
-    ParameterLocation::Header,
-    ParameterLocation::Cookie,
-];
-
 // what a route reads from each request, in the order FastAPI reports its errors
 #[derive(Debug, Default)]
 pub(super) struct Inputs {
@@ -66,7 +58,7 @@ fn flatten(declarations: Declarations, path: &str, inputs: &mut Inputs) -> Resul
         flatten(dependency, path, inputs)?;
     }
     parameters.sort_by_key(|parameter| {
-        LOCATIONS
+        ParameterLocation::IN_ORDER
             .iter()
             .position(|location| *location == parameter.location())
     });

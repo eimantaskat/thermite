@@ -2,9 +2,12 @@ use std::error::Error;
 use std::future::Future;
 
 use http::Method;
-use thermite_core::{Request, RequestHandler, Response, RouteDescription, RouteError, Router};
+use thermite_core::{
+    Docs, OpenApi, Request, RequestHandler, Response, RouteDescription, RouteError, Router,
+};
+use tokio::sync::OnceCell;
 
-use crate::handler::{Handler, HandlerEndpoint};
+use crate::handler::{Handler, HandlerEndpoint, handler_name};
 use crate::lifespan::Lifespan;
 use crate::resource::Resource;
 use crate::state::RequiredState;
@@ -13,6 +16,9 @@ use crate::state::RequiredState;
 pub struct App {
     router: Router,
     lifespan: Lifespan,
+    openapi: OpenApi,
+    // built when the app starts, once every route is added
+    docs: OnceCell<Docs>,
 }
 
 macro_rules! method_routes {
@@ -45,6 +51,42 @@ impl App {
         self
     }
 
+    #[must_use]
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.openapi = self.openapi.title(title);
+        self
+    }
+
+    #[must_use]
+    pub fn version(mut self, version: impl Into<String>) -> Self {
+        self.openapi = self.openapi.version(version);
+        self
+    }
+
+    #[must_use]
+    pub fn openapi_path(mut self, path: impl Into<String>) -> Self {
+        self.openapi = self.openapi.openapi_path(path);
+        self
+    }
+
+    #[must_use]
+    pub fn docs_path(mut self, path: impl Into<String>) -> Self {
+        self.openapi = self.openapi.docs_path(path);
+        self
+    }
+
+    #[must_use]
+    pub fn without_openapi(mut self) -> Self {
+        self.openapi = self.openapi.without_openapi();
+        self
+    }
+
+    #[must_use]
+    pub fn without_docs(mut self) -> Self {
+        self.openapi = self.openapi.without_docs();
+        self
+    }
+
     // resources start in the order added, so each can need the ones before it
     #[must_use]
     pub fn resource<T: Resource>(mut self) -> Self {
@@ -53,7 +95,7 @@ impl App {
     }
 
     pub fn route<Function, Extractors>(
-        self,
+        mut self,
         method: Method,
         path: impl Into<String>,
         handler: Function,
@@ -64,16 +106,18 @@ impl App {
     {
         let path = path.into();
         let needed_by = format!("{method} {path}");
-        let description =
-            <Function as Handler<Extractors>>::describe(RouteDescription::new(method, path));
-        let router = self
+        let mut description = RouteDescription::new(method, path);
+        if let Some(name) = handler_name::<Function>() {
+            description = description.with_name(name);
+        }
+        let description = <Function as Handler<Extractors>>::describe(description);
+        self.router = self
             .router
             .route(description, HandlerEndpoint::<_, Extractors>::new(handler))?;
-        let mut lifespan = self.lifespan;
         let mut required = RequiredState::default();
         <Function as Handler<Extractors>>::require_state(&mut required);
-        lifespan.require(needed_by, required);
-        Ok(Self { router, lifespan })
+        self.lifespan.require(needed_by, required);
+        Ok(self)
     }
 
     method_routes!(
@@ -89,12 +133,19 @@ impl App {
 }
 
 impl RequestHandler for App {
-    fn call(&self, mut request: Request) -> impl Future<Output = Response> + Send {
+    async fn call(&self, mut request: Request) -> Response {
+        if let Some(response) = self.docs.get().and_then(|docs| docs.respond(&request)) {
+            return response;
+        }
         self.lifespan.hand_state_to(&mut request);
-        self.router.call(request)
+        self.router.call(request).await
     }
 
+    // the docs first, since they start nothing that would need stopping when they fail
     async fn startup(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+        self.docs
+            .get_or_try_init(|| async { Docs::new(&self.openapi, &self.router) })
+            .await?;
         Ok(self.lifespan.startup().await?)
     }
 

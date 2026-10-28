@@ -9,10 +9,11 @@ use http::header::ALLOW;
 use http::{HeaderValue, Method, StatusCode};
 
 use crate::arguments::Arguments;
-use crate::description::RouteDescription;
+use crate::description::{Parameter, RouteDescription};
 use crate::handler::{Endpoint, Request, RequestHandler, Response, RouteHandler};
 use crate::response::json_response;
 use crate::route_error::RouteError;
+use crate::schema::Schema;
 use crate::validation::validation_failed;
 use check::{Inputs, check_description};
 use extract::extract_arguments;
@@ -28,8 +29,20 @@ pub struct Router {
 }
 
 struct Route {
+    // the table orders routes by how specific they are, while the docs list them as registered
+    registered: usize,
+    name: Option<String>,
     inputs: Inputs,
     endpoint: Box<dyn Endpoint>,
+}
+
+// what the docs show of a route
+pub(crate) struct Operation<'router> {
+    pub(crate) method: &'router Method,
+    pub(crate) path: &'router str,
+    pub(crate) name: Option<&'router str>,
+    pub(crate) parameters: &'router [Parameter],
+    pub(crate) body: Option<&'router Schema>,
 }
 
 enum Dispatch<'router> {
@@ -59,16 +72,35 @@ impl Router {
     ) -> Result<Self, RouteError> {
         let pattern = PathPattern::parse(description.path())?;
         let method = description.method().clone();
+        let name = description.name().map(str::to_owned);
         let inputs = check_description(description, &pattern)?;
+        let registered = self.routes.len();
         self.routes.insert(
             method,
             pattern,
             Route {
+                registered,
+                name,
                 inputs,
                 endpoint: Box::new(handler),
             },
         )?;
         Ok(self)
+    }
+
+    pub(crate) fn operations(&self) -> Vec<Operation<'_>> {
+        let mut routes: Vec<_> = self.routes.iter().collect();
+        routes.sort_by_key(|(_, _, route)| route.registered);
+        routes
+            .into_iter()
+            .map(|(method, pattern, route)| Operation {
+                method,
+                path: pattern.as_str(),
+                name: route.name.as_deref(),
+                parameters: &route.inputs.parameters,
+                body: route.inputs.body.as_ref(),
+            })
+            .collect()
     }
 
     fn dispatch(&self, request: &Request) -> Dispatch<'_> {

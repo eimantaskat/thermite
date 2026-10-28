@@ -1,3 +1,5 @@
+use std::any::type_name;
+
 use thermite_core::{Field, Schema};
 
 pub trait ToSchema {
@@ -7,12 +9,40 @@ pub trait ToSchema {
 // a struct whose fields the extractors can declare one by one
 pub trait Model {
     fn fields() -> Vec<Field>;
+
+    // the name the docs list the model under
+    #[must_use]
+    fn name() -> String {
+        schema_name(type_name::<Self>())
+    }
 }
 
 impl<T: Model> ToSchema for T {
     fn schema() -> Schema {
-        Schema::object(T::fields())
+        Schema::model(T::name(), T::fields())
     }
+}
+
+// `app::Page<app::Item>` becomes `Page_Item_`, as pydantic names `Page[Item]`, using only characters OpenAPI allows
+fn schema_name(type_name: &str) -> String {
+    let mut name = String::with_capacity(type_name.len());
+    let mut segment_start = 0;
+    let mut rest = type_name;
+    while let Some(character) = rest.chars().next() {
+        if let Some(after_separator) = rest.strip_prefix("::") {
+            name.truncate(segment_start);
+            rest = after_separator;
+            continue;
+        }
+        if character.is_ascii_alphanumeric() || character == '_' {
+            name.push(character);
+        } else {
+            name.push('_');
+            segment_start = name.len();
+        }
+        rest = &rest[character.len_utf8()..];
+    }
+    name
 }
 
 impl ToSchema for String {
@@ -73,15 +103,34 @@ mod tests {
         );
     }
 
+    struct Page<T>(T);
+
+    impl<T> Model for Page<T> {
+        fn fields() -> Vec<Field> {
+            Vec::new()
+        }
+    }
+
+    // type_name's format may change between compilers, so this pins it on each toolchain bump
+    #[test]
+    fn a_model_is_named_after_its_type_without_module_paths() {
+        assert_eq!(Item::name(), "Item");
+        assert_eq!(Page::<Item>::name(), "Page_Item_");
+        assert_eq!(Page::<(i64, &str)>::name(), "Page__i64___str__");
+    }
+
     #[test]
     fn a_model_is_an_object_of_its_fields() {
         assert_eq!(
             Vec::<Item>::schema(),
-            Schema::array(Schema::object([
-                Field::new("name", Schema::string()),
-                Field::new("tags", Schema::array(Schema::string()))
-                    .with_default(Vec::<String>::new()),
-            ]))
+            Schema::array(Schema::model(
+                "Item",
+                [
+                    Field::new("name", Schema::string()),
+                    Field::new("tags", Schema::array(Schema::string()))
+                        .with_default(Vec::<String>::new()),
+                ]
+            ))
         );
     }
 }

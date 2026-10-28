@@ -26,6 +26,6 @@ pub use resource::Resource;
 pub use response::IntoResponse;
 pub use state::{RequiredState, State};
 pub use thermite_core::{
-    Arguments, Field, Parameter, ParameterLocation, Request, Response, RouteDescription,
-    RouteError, Schema, Server, ServerError, Value,
+    Arguments, Field, OpenApiError, Parameter, ParameterLocation, Request, Response,
+    RouteDescription, RouteError, Schema, Server, ServerError, Value,
 };

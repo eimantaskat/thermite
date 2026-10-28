@@ -19,7 +19,7 @@ impl Schema {
             Kind::Number => number(&value),
             Kind::Boolean => boolean(&value),
             Kind::Array(items) => return array(items, value, location),
-            Kind::Object(fields) => return object(fields, value, location),
+            Kind::Object { fields, .. } => return object(fields, value, location),
         };
         match coerced {
             Ok(Coerced::Unchanged) => Ok(value),

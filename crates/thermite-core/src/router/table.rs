@@ -67,6 +67,16 @@ impl<T> RouteTable<T> {
         Ok(())
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&Method, &PathPattern, &T)> {
+        self.entries
+            .iter()
+            .map(|entry| (&entry.method, &entry.pattern, &entry.value))
+    }
+
     pub(crate) fn lookup(&self, method: &Method, path: &str) -> Lookup<'_, T> {
         let segments = path::decoded_segments(path);
         let matching: Vec<&Entry<T>> = self

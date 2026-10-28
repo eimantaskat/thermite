@@ -1,8 +1,11 @@
 mod coerce;
+mod json_schema;
 
 use std::collections::HashSet;
 
 use serde_json::Value;
+
+pub(crate) use json_schema::{Components, JsonSchema, NameConflict, entries, title};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Schema(Kind);
@@ -14,7 +17,11 @@ enum Kind {
     Number,
     Boolean,
     Array(Box<Schema>),
-    Object(Vec<Field>),
+    // a named object is a model, documented once and referenced by name
+    Object {
+        name: Option<String>,
+        fields: Vec<Field>,
+    },
 }
 
 impl Schema {
@@ -45,11 +52,22 @@ impl Schema {
 
     #[must_use]
     pub fn object(fields: impl IntoIterator<Item = Field>) -> Self {
-        Self(Kind::Object(fields.into_iter().collect()))
+        Self(Kind::Object {
+            name: None,
+            fields: fields.into_iter().collect(),
+        })
+    }
+
+    #[must_use]
+    pub fn model(name: impl Into<String>, fields: impl IntoIterator<Item = Field>) -> Self {
+        Self(Kind::Object {
+            name: Some(name.into()),
+            fields: fields.into_iter().collect(),
+        })
     }
 
     pub(crate) fn is_scalar(&self) -> bool {
-        !matches!(self.0, Kind::Array(_) | Kind::Object(_))
+        !matches!(self.0, Kind::Array(_) | Kind::Object { .. })
     }
 
     pub(crate) fn is_scalar_or_list_of_scalars(&self) -> bool {
@@ -62,7 +80,7 @@ impl Schema {
     pub(crate) fn duplicate_field(&self) -> Option<&str> {
         match &self.0 {
             Kind::Array(items) => items.duplicate_field(),
-            Kind::Object(fields) => {
+            Kind::Object { fields, .. } => {
                 let mut seen = HashSet::new();
                 fields
                     .iter()

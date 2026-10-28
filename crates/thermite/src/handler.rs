@@ -1,3 +1,4 @@
+use std::any::type_name;
 use std::future::Future;
 use std::marker::PhantomData;
 
@@ -55,6 +56,23 @@ macro_rules! impl_handler {
 }
 
 for_each_arity!(impl_handler);
+
+// a fn item's type is named after the function, while a closure or fn pointer has no name of its own
+pub(crate) fn handler_name<Function>() -> Option<&'static str> {
+    let full = type_name::<Function>();
+    let path = full.split('<').next().unwrap_or(full);
+    let is_identifier = |segment: &str| {
+        !segment.is_empty()
+            && segment
+                .chars()
+                .all(|character| character.is_alphanumeric() || character == '_')
+    };
+    if path.split("::").all(is_identifier) {
+        path.rsplit("::").next()
+    } else {
+        None
+    }
+}
 
 // a blanket RouteHandler impl over every Handler<Extractors> would leave Extractors unconstrained
 pub(crate) struct HandlerEndpoint<Function, Extractors> {
@@ -197,6 +215,23 @@ mod tests {
                 .parameter(Parameter::query("offset", Schema::integer()).with_default(0))
                 .parameter(Parameter::query("limit", Schema::integer()))
         );
+    }
+
+    async fn read_items() {}
+
+    // type_name's format may change between compilers, so this pins it on each toolchain bump
+    #[test]
+    fn names_a_function_handler_after_the_function_only() {
+        let closure = || async {};
+        let pointer: fn() -> std::future::Ready<()> = || ready(());
+
+        assert_eq!(name_of(&read_items), Some("read_items"));
+        assert_eq!(name_of(&closure), None);
+        assert_eq!(name_of(&pointer), None);
+    }
+
+    fn name_of<Function>(_: &Function) -> Option<&'static str> {
+        handler_name::<Function>()
     }
 
     #[test]

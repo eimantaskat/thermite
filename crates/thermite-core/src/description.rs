@@ -9,6 +9,7 @@ use crate::schema::{Field, Schema};
 pub struct RouteDescription {
     method: Method,
     path: String,
+    name: Option<String>,
     declarations: Declarations,
 }
 
@@ -35,8 +36,16 @@ impl RouteDescription {
         Self {
             method,
             path: path.into(),
+            name: None,
             declarations: Declarations::default(),
         }
+    }
+
+    // like a FastAPI route name, it gives the operation its summary and id in the docs
+    #[must_use]
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
     }
 
     #[must_use]
@@ -70,6 +79,10 @@ impl RouteDescription {
         &self.path
     }
 
+    pub(crate) fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
     pub(crate) fn into_declarations(self) -> Declarations {
         self.declarations
     }
@@ -85,6 +98,9 @@ pub enum ParameterLocation {
 }
 
 impl ParameterLocation {
+    // FastAPI reports errors and lists parameters by location in this order, whatever the declaration order
+    pub(crate) const IN_ORDER: [Self; 4] = [Self::Path, Self::Query, Self::Header, Self::Cookie];
+
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Path => "path",
