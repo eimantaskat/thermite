@@ -9,13 +9,21 @@ use crate::schema::{Field, Schema};
 pub struct RouteDescription {
     method: Method,
     path: String,
-    parameters: Vec<Parameter>,
-    body: Body,
+    declarations: Declarations,
+}
+
+// what one handler or dependency declares, with what its dependencies declare nested inside
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct Declarations {
+    pub(crate) parameters: Vec<Parameter>,
+    pub(crate) body: Body,
+    pub(crate) dependencies: Vec<Declarations>,
 }
 
 // a second body is kept as a state of its own so that registering the route can report it
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Body {
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) enum Body {
+    #[default]
     NotDeclared,
     Declared(Schema),
     DeclaredTwice,
@@ -27,23 +35,30 @@ impl RouteDescription {
         Self {
             method,
             path: path.into(),
-            parameters: Vec::new(),
-            body: Body::NotDeclared,
+            declarations: Declarations::default(),
         }
     }
 
     #[must_use]
     pub fn parameter(mut self, parameter: Parameter) -> Self {
-        self.parameters.push(parameter);
+        self.declarations.parameters.push(parameter);
         self
     }
 
     #[must_use]
     pub fn body(mut self, schema: Schema) -> Self {
-        self.body = match self.body {
+        self.declarations.body = match self.declarations.body {
             Body::NotDeclared => Body::Declared(schema),
             Body::Declared(_) | Body::DeclaredTwice => Body::DeclaredTwice,
         };
+        self
+    }
+
+    // `describe` declares into an empty description, which is kept as a group of its own
+    #[must_use]
+    pub fn dependency(mut self, describe: impl FnOnce(Self) -> Self) -> Self {
+        let dependency = describe(Self::new(self.method.clone(), self.path.clone()));
+        self.declarations.dependencies.push(dependency.declarations);
         self
     }
 
@@ -55,19 +70,8 @@ impl RouteDescription {
         &self.path
     }
 
-    pub(crate) fn parameters(&self) -> &[Parameter] {
-        &self.parameters
-    }
-
-    pub(crate) fn body_schema(&self) -> Option<&Schema> {
-        match &self.body {
-            Body::Declared(schema) => Some(schema),
-            Body::NotDeclared | Body::DeclaredTwice => None,
-        }
-    }
-
-    pub(crate) fn declares_two_bodies(&self) -> bool {
-        self.body == Body::DeclaredTwice
+    pub(crate) fn into_declarations(self) -> Declarations {
+        self.declarations
     }
 }
 
@@ -162,5 +166,18 @@ impl Parameter {
 
     pub(crate) fn header_name(&self) -> Option<&HeaderName> {
         self.header_name.as_ref()
+    }
+
+    // a parsed header name is lowercase, so two header parameters clash when their names differ only in case
+    pub(crate) fn declared_name(&self) -> &str {
+        self.header_name
+            .as_ref()
+            .map_or(self.field.name(), HeaderName::as_str)
+    }
+
+    pub(crate) fn declares_the_same_as(&self, other: &Parameter) -> bool {
+        self.location == other.location
+            && self.declared_name() == other.declared_name()
+            && self.field.matches_ignoring_name(&other.field)
     }
 }

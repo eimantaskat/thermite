@@ -3,6 +3,8 @@ use std::marker::PhantomData;
 
 use thermite_core::{Arguments, Request, Response, RouteDescription, RouteHandler};
 
+use crate::arity::for_each_arity;
+use crate::dependency::DependencyCache;
 use crate::extract::FromRequest;
 use crate::response::IntoResponse;
 
@@ -23,45 +25,29 @@ macro_rules! impl_handler {
             $($extractor: FromRequest,)*
         {
             fn describe(description: RouteDescription) -> RouteDescription {
-                $(let description = $extractor::describe(description);)*
-                description
+                <($($extractor,)*) as FromRequest>::describe(description)
             }
 
-            // each value is named after its type parameter, and a handler without extractors reads nothing
-            #[allow(non_snake_case, unused_variables)]
+            // each value is named after its type parameter
+            #[allow(non_snake_case)]
             fn call(
                 &self,
-                request: Request,
+                mut request: Request,
                 arguments: Arguments,
             ) -> impl Future<Output = Response> + Send {
+                request.extensions_mut().insert(DependencyCache::default());
                 async move {
-                    $(
-                        let $extractor = match $extractor::from_request(&request, &arguments).await {
-                            Ok(value) => value,
-                            Err(rejection) => return rejection.into_response(),
-                        };
-                    )*
-                    self($($extractor),*).await.into_response()
+                    match <($($extractor,)*) as FromRequest>::from_request(&request, &arguments).await {
+                        Ok(($($extractor,)*)) => self($($extractor),*).await.into_response(),
+                        Err(rejection) => rejection,
+                    }
                 }
             }
         }
     };
 }
 
-// calls `impl_handler!` once per prefix of the list: no extractors, then one, up to all sixteen
-macro_rules! impl_handler_for_each_arity {
-    ([$($done:ident),*]) => {
-        impl_handler!($($done),*);
-    };
-    ([$($done:ident),*] $next:ident $($rest:ident)*) => {
-        impl_handler!($($done),*);
-        impl_handler_for_each_arity!([$($done,)* $next] $($rest)*);
-    };
-}
-
-impl_handler_for_each_arity!([] Extractor1 Extractor2 Extractor3 Extractor4 Extractor5 Extractor6
-    Extractor7 Extractor8 Extractor9 Extractor10 Extractor11 Extractor12 Extractor13 Extractor14
-    Extractor15 Extractor16);
+for_each_arity!(impl_handler);
 
 // a blanket RouteHandler impl over every Handler<Extractors> would leave Extractors unconstrained
 pub(crate) struct HandlerEndpoint<Function, Extractors> {

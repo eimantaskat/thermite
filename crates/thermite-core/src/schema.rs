@@ -138,4 +138,8 @@ impl Field {
     pub(crate) fn is_required(&self) -> bool {
         self.presence == Presence::Required
     }
+
+    pub(crate) fn matches_ignoring_name(&self, other: &Field) -> bool {
+        self.schema == other.schema && self.presence == other.presence
+    }
 }

@@ -1,3 +1,5 @@
+use std::convert::Infallible;
+
 use http::header::CONTENT_TYPE;
 use http::{HeaderValue, StatusCode};
 use thermite_core::Response;
@@ -9,6 +11,13 @@ pub trait IntoResponse {
 impl IntoResponse for Response {
     fn into_response(self) -> Response {
         self
+    }
+}
+
+// lets an extractor or dependency that cannot fail say so in its Rejection type
+impl IntoResponse for Infallible {
+    fn into_response(self) -> Response {
+        match self {}
     }
 }
 

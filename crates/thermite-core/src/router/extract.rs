@@ -5,27 +5,29 @@ use http::header::{CONTENT_TYPE, COOKIE};
 use serde_json::error::Category;
 use serde_json::{Value, json};
 
+use super::check::Inputs;
 use super::path::PathParameters;
 use crate::arguments::Arguments;
-use crate::description::{Parameter, ParameterLocation, RouteDescription};
+use crate::description::{Parameter, ParameterLocation};
 use crate::handler::Request;
 use crate::parse::{decode_latin1, parse_cookies, parse_query};
 use crate::validation::{ErrorKind, Location, ValidationError, collect_all};
 
 pub(super) fn extract_arguments(
-    description: &RouteDescription,
+    inputs: &Inputs,
     path_parameters: &PathParameters,
     request: &Request,
 ) -> Result<Arguments, Vec<ValidationError>> {
     // like FastAPI, a body that is not JSON fails on its own, before any parameter is checked
-    let body = description
-        .body_schema()
+    let body = inputs
+        .body
+        .as_ref()
         .map(|schema| read_body(request).map(|input| (schema, input)))
         .transpose()?;
 
     let query = parse_query(request.uri().query().unwrap_or(""));
-    let reads_cookies = description
-        .parameters()
+    let reads_cookies = inputs
+        .parameters
         .iter()
         .any(|parameter| parameter.location() == ParameterLocation::Cookie);
     // like Starlette, only the first Cookie header is read
@@ -38,40 +40,26 @@ pub(super) fn extract_arguments(
         .as_deref()
         .map(parse_cookies)
         .unwrap_or_default();
-    let in_location = |location| {
-        description
-            .parameters()
-            .iter()
-            .filter(move |parameter| parameter.location() == location)
+    let validate = |parameters: &[Parameter]| {
+        collect_all(parameters.iter().map(|parameter| {
+            let name = parameter.field().name();
+            let input = match parameter.location() {
+                ParameterLocation::Path => path_parameters.get(name).map(Value::from),
+                ParameterLocation::Query => query_input(parameter, &query),
+                ParameterLocation::Header => parameter
+                    .header_name()
+                    .and_then(|header_name| header_input(parameter, header_name, request)),
+                ParameterLocation::Cookie => cookies
+                    .iter()
+                    .rev()
+                    .find(|(found, _)| *found == name)
+                    .map(|(_, value)| Value::from(value.as_ref())),
+            };
+            validate_parameter(parameter, input)
+        }))
     };
-    // FastAPI reports errors by location in this order, whatever the declaration order
-    let locations = [
-        ParameterLocation::Path,
-        ParameterLocation::Query,
-        ParameterLocation::Header,
-        ParameterLocation::Cookie,
-    ];
-    let parameters = collect_all(
-        locations
-            .into_iter()
-            .flat_map(in_location)
-            .map(|parameter| {
-                let name = parameter.field().name();
-                let input = match parameter.location() {
-                    ParameterLocation::Path => path_parameters.get(name).map(Value::from),
-                    ParameterLocation::Query => query_input(parameter, &query),
-                    ParameterLocation::Header => parameter
-                        .header_name()
-                        .and_then(|header_name| header_input(parameter, header_name, request)),
-                    ParameterLocation::Cookie => cookies
-                        .iter()
-                        .rev()
-                        .find(|(found, _)| *found == name)
-                        .map(|(_, value)| Value::from(value.as_ref())),
-                };
-                validate_parameter(parameter, input)
-            }),
-    );
+    let (before_body, after_body) = inputs.parameters.split_at(inputs.body_position);
+    let before_body = validate(before_body);
     let body = body
         .map(|(schema, input)| {
             let location = Location::root("body");
@@ -85,13 +73,18 @@ pub(super) fn extract_arguments(
             }
         })
         .transpose();
+    let after_body = validate(after_body);
 
-    match (parameters, body) {
-        (Ok(parameters), Ok(body)) => Ok(Arguments::new(parameters, body)),
-        (parameters, body) => Err(parameters
+    match (before_body, body, after_body) {
+        (Ok(mut parameters), Ok(body), Ok(after_body)) => {
+            parameters.extend(after_body);
+            Ok(Arguments::new(parameters, body))
+        }
+        (before_body, body, after_body) => Err(before_body
             .err()
             .into_iter()
             .chain(body.err())
+            .chain(after_body.err())
             .flatten()
             .collect()),
     }
@@ -217,6 +210,9 @@ mod tests {
     use http::{HeaderValue, Method};
 
     use super::*;
+    use crate::description::RouteDescription;
+    use crate::router::check::check_description;
+    use crate::router::path::PathPattern;
     use crate::schema::{Field, Schema};
 
     fn with_headers(uri: &str, headers: &[(&'static str, &'static [u8])]) -> Request {
@@ -244,11 +240,19 @@ mod tests {
         RouteDescription::new(Method::POST, "/items").body(schema)
     }
 
+    fn inputs(description: &RouteDescription) -> Inputs {
+        check_description(
+            description.clone(),
+            &PathPattern::parse(description.path()).unwrap(),
+        )
+        .unwrap()
+    }
+
     fn extract(
         description: &RouteDescription,
         request: &Request,
     ) -> Result<Arguments, Vec<ValidationError>> {
-        extract_arguments(description, &PathParameters::default(), request)
+        extract_arguments(&inputs(description), &PathParameters::default(), request)
     }
 
     fn json_invalid_at(position: usize, message: &str) -> Result<Arguments, Vec<ValidationError>> {
@@ -392,6 +396,28 @@ mod tests {
     }
 
     #[test]
+    fn reports_the_body_errors_of_a_dependency_in_its_place() {
+        let description = RouteDescription::new(Method::POST, "/items")
+            .parameter(Parameter::query("limit", Schema::integer()))
+            .dependency(|dependency| {
+                dependency
+                    .parameter(Parameter::header("x-key", Schema::string()))
+                    .body(Schema::integer())
+            });
+
+        let errors = extract(&description, &request("/items?limit=x", None, "\"text\""));
+
+        assert_eq!(
+            errors,
+            Err(vec![
+                ValidationError::at(ErrorKind::Missing, json!(["header", "x-key"]), json!(null)),
+                ValidationError::at(ErrorKind::IntParsing, json!(["body"]), json!("text")),
+                ValidationError::at(ErrorKind::IntParsing, json!(["query", "limit"]), json!("x")),
+            ])
+        );
+    }
+
+    #[test]
     fn reports_errors_by_location_then_body_errors() {
         let description = RouteDescription::new(Method::POST, "/items/{id}")
             .parameter(Parameter::cookie("session", Schema::string()))
@@ -402,7 +428,7 @@ mod tests {
         let path_parameters = PathParameters::from_pairs([("id", "x")]);
 
         let errors = extract_arguments(
-            &description,
+            &inputs(&description),
             &path_parameters,
             &request("/items/x", None, ""),
         );

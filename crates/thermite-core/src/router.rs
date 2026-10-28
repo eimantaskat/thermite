@@ -14,7 +14,7 @@ use crate::handler::{Endpoint, Request, RequestHandler, Response, RouteHandler};
 use crate::response::json_response;
 use crate::route_error::RouteError;
 use crate::validation::validation_failed;
-use check::check_description;
+use check::{Inputs, check_description};
 use extract::extract_arguments;
 use path::PathPattern;
 use table::{Lookup, RouteTable};
@@ -28,7 +28,7 @@ pub struct Router {
 }
 
 struct Route {
-    description: RouteDescription,
+    inputs: Inputs,
     endpoint: Box<dyn Endpoint>,
 }
 
@@ -58,12 +58,13 @@ impl Router {
         handler: impl RouteHandler,
     ) -> Result<Self, RouteError> {
         let pattern = PathPattern::parse(description.path())?;
-        check_description(&description, &pattern)?;
+        let method = description.method().clone();
+        let inputs = check_description(description, &pattern)?;
         self.routes.insert(
-            description.method().clone(),
+            method,
             pattern,
             Route {
-                description,
+                inputs,
                 endpoint: Box::new(handler),
             },
         )?;
@@ -75,7 +76,7 @@ impl Router {
             Lookup::Found {
                 value: route,
                 parameters,
-            } => match extract_arguments(&route.description, &parameters, request) {
+            } => match extract_arguments(&route.inputs, &parameters, request) {
                 Ok(arguments) => Dispatch::Endpoint(route.endpoint.as_ref(), arguments),
                 Err(errors) => Dispatch::Respond(validation_failed(errors)),
             },

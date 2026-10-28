@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 mod app;
+mod arity;
+mod dependency;
 mod extract;
 mod handler;
 mod json;
@@ -9,6 +11,7 @@ mod rejection;
 mod response;
 
 pub use app::App;
+pub use dependency::{Dependency, Depends};
 pub use extract::{Cookie, FromRequest, Header, Path, Query};
 pub use handler::Handler;
 pub use http::{self, Method, StatusCode};

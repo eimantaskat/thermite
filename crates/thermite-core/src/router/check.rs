@@ -1,57 +1,108 @@
 use std::collections::HashSet;
 
 use super::path::PathPattern;
-use crate::description::{Parameter, ParameterLocation, RouteDescription};
+use crate::description::{Body, Declarations, Parameter, ParameterLocation, RouteDescription};
 use crate::route_error::RouteError;
+use crate::schema::Schema;
+
+// FastAPI reports errors by location in this order, whatever the declaration order
+const LOCATIONS: [ParameterLocation; 4] = [
+    ParameterLocation::Path,
+    ParameterLocation::Query,
+    ParameterLocation::Header,
+    ParameterLocation::Cookie,
+];
+
+// what a route reads from each request, in the order FastAPI reports its errors
+#[derive(Debug, Default)]
+pub(super) struct Inputs {
+    pub(super) parameters: Vec<Parameter>,
+    pub(super) body: Option<Schema>,
+    // like FastAPI, body errors follow the values of the group that declared the body
+    pub(super) body_position: usize,
+}
 
 pub(super) fn check_description(
-    description: &RouteDescription,
+    description: RouteDescription,
     pattern: &PathPattern,
-) -> Result<(), RouteError> {
-    let path = description.path();
-    let mut seen = HashSet::new();
-    for parameter in description.parameters() {
-        let name = parameter.field().name();
-        if !seen.insert((parameter.location(), declared_name(parameter))) {
-            return Err(RouteError::DuplicateDeclaration {
-                path: path.to_owned(),
-                location: parameter.location(),
-                name: name.to_owned(),
-            });
-        }
-        check_parameter(parameter, pattern, path)?;
+) -> Result<Inputs, RouteError> {
+    let path = description.path().to_owned();
+    let mut inputs = Inputs::default();
+    flatten(description.into_declarations(), &path, &mut inputs)?;
+    for parameter in &inputs.parameters {
+        check_parameter(parameter, pattern, &path)?;
     }
-    if let Some(name) = pattern
-        .parameter_names()
-        .find(|name| !seen.contains(&(ParameterLocation::Path, *name)))
-    {
+    if let Some(name) = pattern.parameter_names().find(|name| {
+        !inputs.parameters.iter().any(|parameter| {
+            parameter.location() == ParameterLocation::Path && parameter.field().name() == *name
+        })
+    }) {
         return Err(RouteError::UndeclaredPathParameter {
-            path: path.to_owned(),
+            path,
             name: name.to_owned(),
         });
     }
-    if description.declares_two_bodies() {
-        return Err(RouteError::DuplicateBody {
-            path: path.to_owned(),
-        });
-    }
-    if let Some(name) = description
-        .body_schema()
+    if let Some(name) = inputs
+        .body
+        .as_ref()
         .and_then(|schema| schema.duplicate_field())
     {
         return Err(RouteError::DuplicateField {
-            path: path.to_owned(),
+            path,
             name: name.to_owned(),
         });
     }
-    Ok(())
+    Ok(inputs)
 }
 
-// a parsed header name is lowercase, so two header parameters clash when their names differ only in case
-fn declared_name(parameter: &Parameter) -> &str {
-    parameter
-        .header_name()
-        .map_or(parameter.field().name(), |name| name.as_str())
+// like FastAPI, a group's dependencies come before its own values, depth first
+fn flatten(declarations: Declarations, path: &str, inputs: &mut Inputs) -> Result<(), RouteError> {
+    let Declarations {
+        mut parameters,
+        body,
+        dependencies,
+    } = declarations;
+    for dependency in dependencies {
+        flatten(dependency, path, inputs)?;
+    }
+    parameters.sort_by_key(|parameter| {
+        LOCATIONS
+            .iter()
+            .position(|location| *location == parameter.location())
+    });
+    let mut own = HashSet::new();
+    for parameter in parameters {
+        let duplicate = || RouteError::DuplicateDeclaration {
+            path: path.to_owned(),
+            location: parameter.location(),
+            name: parameter.field().name().to_owned(),
+        };
+        if !own.insert((parameter.location(), parameter.declared_name().to_owned())) {
+            return Err(duplicate());
+        }
+        // a dependency shared by several others is declared once by each, and read once
+        let earlier = inputs.parameters.iter().find(|earlier| {
+            earlier.location() == parameter.location()
+                && earlier.declared_name() == parameter.declared_name()
+        });
+        match earlier {
+            Some(earlier) if earlier.declares_the_same_as(&parameter) => {}
+            Some(_) => return Err(duplicate()),
+            None => inputs.parameters.push(parameter),
+        }
+    }
+    match (body, &inputs.body) {
+        (Body::NotDeclared, _) => Ok(()),
+        (Body::Declared(schema), None) => {
+            inputs.body = Some(schema);
+            inputs.body_position = inputs.parameters.len();
+            Ok(())
+        }
+        (Body::Declared(schema), Some(earlier)) if schema == *earlier => Ok(()),
+        (Body::Declared(_), Some(_)) | (Body::DeclaredTwice, _) => Err(RouteError::DuplicateBody {
+            path: path.to_owned(),
+        }),
+    }
 }
 
 fn check_parameter(
@@ -97,11 +148,15 @@ mod tests {
     use super::*;
     use crate::schema::{Field, Schema};
 
-    fn check(description: &RouteDescription) -> Result<(), RouteError> {
+    fn flattened(description: &RouteDescription) -> Result<Inputs, RouteError> {
         check_description(
-            description,
+            description.clone(),
             &PathPattern::parse(description.path()).unwrap(),
         )
+    }
+
+    fn check(description: &RouteDescription) -> Result<(), RouteError> {
+        flattened(description).map(|_| ())
     }
 
     fn items(path: &str) -> RouteDescription {
@@ -122,6 +177,83 @@ mod tests {
             ]));
 
         assert_eq!(check(&description), Ok(()));
+    }
+
+    #[test]
+    fn orders_dependencies_first_then_each_group_by_location() {
+        let description = items("/items/{id}")
+            .parameter(Parameter::query("q", Schema::string()))
+            .parameter(Parameter::path("id", Schema::integer()))
+            .dependency(|dependency| {
+                dependency
+                    .parameter(Parameter::header("x-key", Schema::string()))
+                    .dependency(|inner| {
+                        inner.parameter(Parameter::cookie("session", Schema::string()))
+                    })
+                    .parameter(Parameter::query("limit", Schema::integer()))
+            });
+
+        let names = flattened(&description)
+            .unwrap()
+            .parameters
+            .iter()
+            .map(|parameter| parameter.field().name().to_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(names, ["session", "limit", "x-key", "id", "q"]);
+    }
+
+    #[test]
+    fn reads_a_value_declared_the_same_way_by_several_groups_once() {
+        let paging = |dependency: RouteDescription| {
+            dependency.parameter(Parameter::query("limit", Schema::integer()))
+        };
+        let description = items("/items")
+            .dependency(paging)
+            .dependency(|dependency| {
+                dependency
+                    .parameter(Parameter::header("X-Key", Schema::string()))
+                    .body(Schema::integer())
+            })
+            .dependency(paging)
+            .parameter(Parameter::header("x-key", Schema::string()))
+            .body(Schema::integer());
+
+        let inputs = flattened(&description).unwrap();
+
+        assert_eq!(
+            inputs.parameters,
+            [
+                Parameter::query("limit", Schema::integer()),
+                Parameter::header("X-Key", Schema::string())
+            ]
+        );
+        assert_eq!(inputs.body, Some(Schema::integer()));
+    }
+
+    #[test]
+    fn rejects_groups_that_declare_the_same_name_differently() {
+        let parameter = items("/items")
+            .dependency(|dependency| dependency.parameter(Parameter::query("q", Schema::string())))
+            .parameter(Parameter::query("q", Schema::string()).optional());
+        let body = items("/items")
+            .dependency(|dependency| dependency.body(Schema::string()))
+            .body(Schema::integer());
+
+        assert_eq!(
+            check(&parameter),
+            Err(RouteError::DuplicateDeclaration {
+                path: "/items".to_owned(),
+                location: ParameterLocation::Query,
+                name: "q".to_owned()
+            })
+        );
+        assert_eq!(
+            check(&body),
+            Err(RouteError::DuplicateBody {
+                path: "/items".to_owned()
+            })
+        );
     }
 
     #[test]
