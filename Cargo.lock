@@ -663,7 +663,10 @@ dependencies = [
 name = "thermite"
 version = "0.1.0"
 dependencies = [
+ "http",
+ "reqwest",
  "thermite-core",
+ "tokio",
 ]
 
 [[package]]

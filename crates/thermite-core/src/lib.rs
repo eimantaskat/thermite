@@ -19,4 +19,5 @@ pub use handler::{Request, RequestHandler, Response, RouteHandler};
 pub use route_error::RouteError;
 pub use router::Router;
 pub use schema::{Field, Schema};
+pub use serde_json::Value;
 pub use server::{Server, ServerError};

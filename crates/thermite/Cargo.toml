@@ -7,7 +7,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+http.workspace = true
 thermite-core.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 
 [lints]
 workspace = true
