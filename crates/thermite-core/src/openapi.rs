@@ -7,7 +7,6 @@ use http::{HeaderValue, Method};
 
 use crate::handler::{Request, Response};
 use crate::router::Router;
-use crate::schema::NameConflict;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
@@ -18,14 +17,14 @@ pub enum OpenApiError {
     SamePath { path: String },
     #[error("the route `{method} {path}` can never run, because the docs answer there")]
     ShadowedRoute { method: Method, path: String },
-    #[error("two different schemas are named `{name}` in the OpenAPI document")]
-    NameConflict { name: String },
-}
-
-impl From<NameConflict> for OpenApiError {
-    fn from(NameConflict(name): NameConflict) -> Self {
-        Self::NameConflict { name }
-    }
+    #[error(
+        "the route `{method} {path}` uses a schema named `{name}`, but a different schema has that name"
+    )]
+    NameConflict {
+        name: String,
+        method: Method,
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -273,6 +272,21 @@ mod tests {
 
         assert!(Docs::new(&OpenApi::new().without_openapi(), &routes).is_ok());
         assert!(Docs::new(&OpenApi::new().openapi_path("/api.json"), &routes).is_ok());
+    }
+
+    #[test]
+    fn names_the_route_whose_model_takes_a_built_in_name() {
+        let routes = router([RouteDescription::new(Method::POST, "/errors")
+            .body(Schema::model("ValidationError", []))]);
+
+        assert_eq!(
+            Docs::new(&OpenApi::new(), &routes).err(),
+            Some(OpenApiError::NameConflict {
+                name: "ValidationError".to_owned(),
+                method: Method::POST,
+                path: "/errors".to_owned()
+            })
+        );
     }
 
     #[test]

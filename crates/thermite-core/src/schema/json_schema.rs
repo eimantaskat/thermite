@@ -16,16 +16,9 @@ pub(crate) struct Components<'schema> {
 pub(crate) struct NameConflict(pub(crate) String);
 
 impl<'schema> Components<'schema> {
-    pub(crate) fn add_built_in(
-        &mut self,
-        name: &'schema str,
-        schema: JsonSchema,
-    ) -> Result<(), NameConflict> {
-        if self.schemas.contains_key(name) {
-            return Err(NameConflict(name.to_owned()));
-        }
+    // added before any model, so a model of the same name is the one that conflicts
+    pub(crate) fn add_built_in(&mut self, name: &'schema str, schema: JsonSchema) {
         self.schemas.insert(name, (None, schema));
-        Ok(())
     }
 
     // like FastAPI, sorted by name
@@ -277,13 +270,13 @@ mod tests {
     }
 
     #[test]
-    fn a_built_in_schema_cannot_share_a_name_with_a_model() {
+    fn a_model_cannot_share_a_name_with_a_built_in_schema() {
         let model = Schema::model("ValidationError", []);
         let mut components = Components::default();
 
-        model.json_schema(&mut components).unwrap();
-        let conflict = components.add_built_in("ValidationError", of_type("object"));
+        components.add_built_in("ValidationError", of_type("object"));
+        let conflict = model.json_schema(&mut components).err();
 
-        assert_eq!(conflict, Err(NameConflict("ValidationError".to_owned())));
+        assert_eq!(conflict, Some(NameConflict("ValidationError".to_owned())));
     }
 }

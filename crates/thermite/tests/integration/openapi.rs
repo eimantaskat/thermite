@@ -4,8 +4,8 @@ use serde::Deserialize;
 use serde_json::json;
 use thermite::http::header::CONTENT_TYPE;
 use thermite::{
-    App, Dependency, Depends, Field, Header, Json, Model, ModelMismatch, OpenApiError, Path, Query,
-    Server, ServerError, StatusCode, ToSchema, Value,
+    App, Dependency, Depends, Field, Header, Json, Method, Model, ModelMismatch, OpenApiError,
+    Path, Query, Server, ServerError, StatusCode, ToSchema, Value,
 };
 
 use crate::support::{RunningServer, TestResult};
@@ -392,12 +392,14 @@ async fn starts_nothing_when_two_different_models_share_a_name() -> TestResult {
     assert_eq!(
         error.downcast_ref::<OpenApiError>(),
         Some(&OpenApiError::NameConflict {
-            name: "Item".to_owned()
+            name: "Item".to_owned(),
+            method: Method::POST,
+            path: "/other".to_owned()
         })
     );
     assert_eq!(
         error.to_string(),
-        "two different schemas are named `Item` in the OpenAPI document"
+        "the route `POST /other` uses a schema named `Item`, but a different schema has that name"
     );
     Ok(())
 }

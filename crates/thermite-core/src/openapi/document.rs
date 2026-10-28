@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use super::OpenApi;
+use super::{OpenApi, OpenApiError};
 use crate::description::Parameter;
 use crate::router::{Operation, Router};
 use crate::schema::{Components, JsonSchema, NameConflict, entries, title};
@@ -8,19 +8,23 @@ use crate::schema::{Components, JsonSchema, NameConflict, entries, title};
 const VALIDATION_ERROR: &str = "ValidationError";
 const HTTP_VALIDATION_ERROR: &str = "HTTPValidationError";
 
-pub(super) fn build(openapi: &OpenApi, router: &Router) -> Result<Value, NameConflict> {
+pub(super) fn build(openapi: &OpenApi, router: &Router) -> Result<Value, OpenApiError> {
     let operations = router.operations();
     let mut components = Components::default();
-    let mut paths = Value::Object(JsonSchema::new());
-    let mut validates = false;
-    for operation in &operations {
-        validates |= reads_input(operation);
-        paths[operation.path][operation.method.as_str().to_lowercase()] =
-            Value::Object(describe(operation, &mut components)?);
+    if operations.iter().any(reads_input) {
+        components.add_built_in(HTTP_VALIDATION_ERROR, http_validation_error());
+        components.add_built_in(VALIDATION_ERROR, validation_error());
     }
-    if validates {
-        components.add_built_in(HTTP_VALIDATION_ERROR, http_validation_error())?;
-        components.add_built_in(VALIDATION_ERROR, validation_error())?;
+    let mut paths = Value::Object(JsonSchema::new());
+    for operation in &operations {
+        let described = describe(operation, &mut components).map_err(|NameConflict(name)| {
+            OpenApiError::NameConflict {
+                name,
+                method: operation.method.clone(),
+                path: operation.path.to_owned(),
+            }
+        })?;
+        paths[operation.path][operation.method.as_str().to_lowercase()] = Value::Object(described);
     }
     let mut document = entries([
         ("openapi", "3.1.0".into()),
