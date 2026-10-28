@@ -3,12 +3,20 @@
 mod app;
 mod extract;
 mod handler;
+mod json;
+mod model;
+mod rejection;
+mod response;
 
 pub use app::App;
-pub use extract::FromRequest;
+pub use extract::{Cookie, FromRequest, Header, Path, Query};
 pub use handler::Handler;
 pub use http::{self, Method, StatusCode};
+pub use json::Json;
+pub use model::{Model, ToSchema};
+pub use rejection::ModelMismatch;
+pub use response::IntoResponse;
 pub use thermite_core::{
-    Arguments, Field, Parameter, Request, Response, RouteDescription, RouteError, Schema, Server,
-    ServerError, Value,
+    Arguments, Field, Parameter, ParameterLocation, Request, Response, RouteDescription,
+    RouteError, Schema, Server, ServerError, Value,
 };

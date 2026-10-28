@@ -8,10 +8,15 @@ repository.workspace = true
 
 [dependencies]
 http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thermite-core.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 reqwest.workspace = true
+serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 
 [lints]

@@ -2,8 +2,8 @@ use std::future::{Future, ready};
 
 use thermite::http::HeaderValue;
 use thermite::{
-    App, Arguments, FromRequest, Handler, Method, Parameter, Request, Response, RouteDescription,
-    Schema, StatusCode, Value,
+    App, Arguments, FromRequest, Handler, IntoResponse, Method, Parameter, Request, Response,
+    RouteDescription, Schema, StatusCode, Value,
 };
 
 use crate::support::{RunningServer, TestResult};
@@ -62,9 +62,9 @@ impl FromRequest for Limit {
 
 struct Forbidden;
 
-impl From<Forbidden> for Response {
-    fn from(_: Forbidden) -> Self {
-        text(StatusCode::FORBIDDEN, r#"{"detail":"Not authenticated"}"#)
+impl IntoResponse for Forbidden {
+    fn into_response(self) -> Response {
+        (StatusCode::FORBIDDEN, r#"{"detail":"Not authenticated"}"#).into_response()
     }
 }
 
@@ -85,8 +85,8 @@ impl FromRequest for Admin {
     }
 }
 
-async fn read_item(ItemId(id): ItemId, Limit(limit): Limit) -> Response {
-    text(StatusCode::OK, format!("item {id}, limit {limit}"))
+async fn read_item(ItemId(id): ItemId, Limit(limit): Limit) -> String {
+    format!("item {id}, limit {limit}")
 }
 
 fn answering(name: &'static str) -> impl Handler<()> {
@@ -134,7 +134,7 @@ async fn answers_422_before_the_handler_when_a_declared_value_is_invalid() -> Te
 #[tokio::test]
 async fn answers_with_the_rejection_of_a_failing_extractor() -> TestResult {
     let app = App::new().delete("/items/{id}", |_: Admin, ItemId(id): ItemId| async move {
-        text(StatusCode::OK, format!("deleted {id}"))
+        format!("deleted {id}")
     })?;
     let server = RunningServer::start(app).await?;
     let client = reqwest::Client::new();
@@ -154,9 +154,7 @@ async fn answers_with_the_rejection_of_a_failing_extractor() -> TestResult {
 
 #[tokio::test]
 async fn answers_422_before_an_extractor_could_reject() -> TestResult {
-    let app = App::new().delete("/items/{id}", |_: Admin, _: ItemId| async {
-        Response::default()
-    })?;
+    let app = App::new().delete("/items/{id}", |_: Admin, _: ItemId| async {})?;
     let server = RunningServer::start(app).await?;
 
     let response = reqwest::Client::new()
@@ -207,10 +205,8 @@ async fn routes_each_method_helper_to_its_own_method() -> TestResult {
 fn rejects_routes_whose_extractors_do_not_fit_the_path() {
     let errors = [
         App::new().get("/items", read_item),
-        App::new().get("/items/{id}", |_: ItemId, _: ItemId| async {
-            Response::default()
-        }),
-        App::new().get("/items/{id}", || async { Response::default() }),
+        App::new().get("/items/{id}", |_: ItemId, _: ItemId| async {}),
+        App::new().get("/items/{id}", || async {}),
     ]
     .map(|result| result.map(|_| ()).map_err(|error| error.to_string()));
 

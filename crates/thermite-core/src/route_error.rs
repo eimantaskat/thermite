@@ -29,6 +29,10 @@ pub enum RouteError {
         location: ParameterLocation,
         name: String,
     },
+    #[error("header parameter `{name}` of `{path}` is not a valid header name")]
+    InvalidHeaderName { path: String, name: String },
+    #[error("`{path}` declares more than one body")]
+    DuplicateBody { path: String },
     #[error("body of `{path}` has the field `{name}` more than once in one object")]
     DuplicateField { path: String, name: String },
     #[error("{method} `{path}` matches the same requests as the route `{existing}`")]
@@ -41,7 +45,11 @@ pub enum RouteError {
 
 fn allowed_types(location: ParameterLocation) -> &'static str {
     match location {
-        ParameterLocation::Path => "a string, integer, number or boolean",
-        ParameterLocation::Query => "a string, integer, number or boolean, or a list of those",
+        ParameterLocation::Path | ParameterLocation::Cookie => {
+            "a string, integer, number or boolean"
+        }
+        ParameterLocation::Query | ParameterLocation::Header => {
+            "a string, integer, number or boolean, or a list of those"
+        }
     }
 }

@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 
 mod arguments;
+mod cookie;
 mod description;
 mod handler;
+mod header;
 mod percent;
 mod query;
 mod response;

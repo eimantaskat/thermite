@@ -120,7 +120,14 @@ impl Field {
         self
     }
 
-    pub(crate) fn name(&self) -> &str {
+    #[must_use]
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &str {
         &self.name
     }
 

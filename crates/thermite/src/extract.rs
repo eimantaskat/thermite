@@ -1,9 +1,15 @@
+mod parameters;
+
 use std::future::Future;
 
-use thermite_core::{Arguments, Request, Response, RouteDescription};
+use thermite_core::{Arguments, Request, RouteDescription};
+
+use crate::response::IntoResponse;
+
+pub use parameters::{Cookie, Header, Path, Query};
 
 pub trait FromRequest: Sized + Send {
-    type Rejection: Into<Response>;
+    type Rejection: IntoResponse;
 
     // what the extractor declares here is validated by the core before any extractor runs
     #[must_use]

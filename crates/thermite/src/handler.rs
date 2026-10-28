@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 use thermite_core::{Arguments, Request, Response, RouteDescription, RouteHandler};
 
 use crate::extract::FromRequest;
+use crate::response::IntoResponse;
 
 // `Extractors` is the tuple of argument types, so one function type can only match one impl
 pub trait Handler<Extractors>: Send + Sync + 'static {
@@ -18,7 +19,7 @@ macro_rules! impl_handler {
         impl<Function, Output, $($extractor),*> Handler<($($extractor,)*)> for Function
         where
             Function: Fn($($extractor),*) -> Output + Send + Sync + 'static,
-            Output: Future<Output = Response> + Send,
+            Output: Future<Output: IntoResponse> + Send,
             $($extractor: FromRequest,)*
         {
             fn describe(description: RouteDescription) -> RouteDescription {
@@ -37,10 +38,10 @@ macro_rules! impl_handler {
                     $(
                         let $extractor = match $extractor::from_request(&request, &arguments).await {
                             Ok(value) => value,
-                            Err(rejection) => return rejection.into(),
+                            Err(rejection) => return rejection.into_response(),
                         };
                     )*
-                    self($($extractor),*).await
+                    self($($extractor),*).await.into_response()
                 }
             }
         }
@@ -113,9 +114,9 @@ mod tests {
 
     struct Unauthorized;
 
-    impl From<Unauthorized> for Response {
-        fn from(_: Unauthorized) -> Self {
-            status(StatusCode::UNAUTHORIZED)
+    impl IntoResponse for Unauthorized {
+        fn into_response(self) -> Response {
+            StatusCode::UNAUTHORIZED.into_response()
         }
     }
 

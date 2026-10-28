@@ -63,7 +63,8 @@ fn string(value: &Value) -> Result<Coerced, ErrorKind> {
 
 fn integer(value: &Value) -> Result<Coerced, ErrorKind> {
     match value {
-        Value::Number(number) if number.is_i64() || number.is_u64() => Ok(Coerced::Unchanged),
+        Value::Number(number) if number.is_i64() => Ok(Coerced::Unchanged),
+        Value::Number(number) if number.is_u64() => Err(ErrorKind::IntParsingSize),
         Value::Number(number) => match number.as_f64() {
             Some(float) if float.fract() == 0.0 => {
                 integer_from_text(&format!("{float:.0}")).map(Coerced::Converted)
@@ -83,10 +84,8 @@ fn integer_from_text(text: &str) -> Result<Value, ErrorKind> {
         }
         _ => text,
     };
+    // only i64, so that every validated integer fits the Rust type a front-end maps it to
     if let Ok(integer) = text.parse::<i64>() {
-        return Ok(integer.into());
-    }
-    if let Ok(integer) = text.parse::<u64>() {
         return Ok(integer.into());
     }
     let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
@@ -193,8 +192,8 @@ mod tests {
         let integer = Schema::integer();
         let cases = [
             (json!(-5), json!(-5)),
-            (json!(u64::MAX), json!(u64::MAX)),
-            (json!(u64::MAX.to_string()), json!(u64::MAX)),
+            (json!(i64::MAX), json!(i64::MAX)),
+            (json!(i64::MIN.to_string()), json!(i64::MIN)),
             (json!(4.0), json!(4)),
             (json!(" +42 "), json!(42)),
             (json!("4.000"), json!(4)),
@@ -219,6 +218,8 @@ mod tests {
             (json!("4.0.0"), ErrorKind::IntParsing),
             (json!(""), ErrorKind::IntParsing),
             (json!("99999999999999999999"), ErrorKind::IntParsingSize),
+            (json!(u64::MAX), ErrorKind::IntParsingSize),
+            (json!(u64::MAX.to_string()), ErrorKind::IntParsingSize),
             (json!(true), ErrorKind::IntType),
             (json!(null), ErrorKind::IntType),
         ];

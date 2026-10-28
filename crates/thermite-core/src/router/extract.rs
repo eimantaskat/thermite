@@ -1,12 +1,15 @@
 use std::borrow::Cow;
 
-use http::header::CONTENT_TYPE;
+use http::HeaderName;
+use http::header::{CONTENT_TYPE, COOKIE};
 use serde_json::error::Category;
 use serde_json::{Value, json};
 
 use crate::arguments::Arguments;
+use crate::cookie::parse_cookies;
 use crate::description::{Parameter, ParameterLocation, RouteDescription};
 use crate::handler::Request;
+use crate::header::decode_latin1;
 use crate::query::parse_query;
 use crate::routing::PathParameters;
 use crate::validation::{ErrorKind, Location, ValidationError, collect_all};
@@ -23,22 +26,50 @@ pub(super) fn extract_arguments(
         .transpose()?;
 
     let query = parse_query(request.uri().query().unwrap_or(""));
+    let reads_cookies = description
+        .parameters()
+        .iter()
+        .any(|parameter| parameter.location() == ParameterLocation::Cookie);
+    // like Starlette, only the first Cookie header is read
+    let cookie_header = request
+        .headers()
+        .get(COOKIE)
+        .filter(|_| reads_cookies)
+        .map(|value| decode_latin1(value.as_bytes()));
+    let cookies = cookie_header
+        .as_deref()
+        .map(parse_cookies)
+        .unwrap_or_default();
     let in_location = |location| {
         description
             .parameters()
             .iter()
             .filter(move |parameter| parameter.location() == location)
     };
-    // FastAPI reports path errors before query errors, whatever the declaration order
+    // FastAPI reports errors by location in this order, whatever the declaration order
+    let locations = [
+        ParameterLocation::Path,
+        ParameterLocation::Query,
+        ParameterLocation::Header,
+        ParameterLocation::Cookie,
+    ];
     let parameters = collect_all(
-        in_location(ParameterLocation::Path)
-            .chain(in_location(ParameterLocation::Query))
+        locations
+            .into_iter()
+            .flat_map(in_location)
             .map(|parameter| {
+                let name = parameter.field().name();
                 let input = match parameter.location() {
-                    ParameterLocation::Path => path_parameters
-                        .get(parameter.field().name())
-                        .map(Value::from),
+                    ParameterLocation::Path => path_parameters.get(name).map(Value::from),
                     ParameterLocation::Query => query_input(parameter, &query),
+                    ParameterLocation::Header => parameter
+                        .header_name()
+                        .and_then(|header_name| header_input(parameter, header_name, request)),
+                    ParameterLocation::Cookie => cookies
+                        .iter()
+                        .rev()
+                        .find(|(found, _)| *found == name)
+                        .map(|(_, value)| Value::from(value.as_ref())),
                 };
                 validate_parameter(parameter, input)
             }),
@@ -88,11 +119,33 @@ fn query_input(parameter: &Parameter, query: &[(Cow<'_, str>, Cow<'_, str>)]) ->
         .filter(|(found, _)| found == name)
         .map(|(_, value)| Value::from(value.as_ref()));
     if parameter.field().schema().is_array() {
-        let values: Vec<Value> = values.collect();
-        (!values.is_empty()).then_some(Value::Array(values))
+        list(values)
     } else {
         values.next_back()
     }
+}
+
+// a list collects every header of the name, a single value takes the first one like Starlette
+fn header_input(
+    parameter: &Parameter,
+    header_name: &HeaderName,
+    request: &Request,
+) -> Option<Value> {
+    let mut values = request
+        .headers()
+        .get_all(header_name)
+        .iter()
+        .map(|value| Value::from(decode_latin1(value.as_bytes())));
+    if parameter.field().schema().is_array() {
+        list(values)
+    } else {
+        values.next()
+    }
+}
+
+fn list(values: impl Iterator<Item = Value>) -> Option<Value> {
+    let values: Vec<Value> = values.collect();
+    (!values.is_empty()).then_some(Value::Array(values))
 }
 
 // FastAPI parses the body as JSON when the content type says JSON or is missing, and passes it on as text otherwise
@@ -167,6 +220,16 @@ mod tests {
 
     use super::*;
     use crate::schema::{Field, Schema};
+
+    fn with_headers(uri: &str, headers: &[(&'static str, &'static [u8])]) -> Request {
+        let mut request = request(uri, None, "");
+        for (name, value) in headers {
+            request
+                .headers_mut()
+                .append(*name, HeaderValue::from_bytes(value).unwrap());
+        }
+        request
+    }
 
     fn request(uri: &str, content_type: Option<&'static str>, body: &'static str) -> Request {
         let mut request = Request::new(Bytes::from_static(body.as_bytes()));
@@ -283,8 +346,58 @@ mod tests {
     }
 
     #[test]
-    fn reports_path_errors_then_query_errors_then_body_errors() {
+    fn matches_header_names_in_any_case_and_decodes_values_as_latin_1() {
+        let description = RouteDescription::new(Method::GET, "/items")
+            .parameter(Parameter::header("X-Token", Schema::string()))
+            .parameter(Parameter::header("x-tag", Schema::array(Schema::string())))
+            .parameter(Parameter::header("x-missing", Schema::array(Schema::string())).optional());
+
+        let arguments = extract(
+            &description,
+            &with_headers(
+                "/items",
+                &[
+                    ("x-token", b"caf\xe9"),
+                    ("x-token", b"second"),
+                    ("x-tag", b"a, b"),
+                    ("x-tag", b"c"),
+                ],
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(arguments.header("X-Token"), Some(&json!("caf\u{e9}")));
+        assert_eq!(arguments.header("x-tag"), Some(&json!(["a, b", "c"])));
+        assert_eq!(arguments.header("x-missing"), Some(&json!(null)));
+    }
+
+    #[test]
+    fn reads_cookies_from_the_first_cookie_header_and_takes_the_last_of_a_name() {
+        let description = RouteDescription::new(Method::GET, "/items")
+            .parameter(Parameter::cookie("session", Schema::string()))
+            .parameter(Parameter::cookie("theme", Schema::string()).with_default("light"));
+
+        let arguments = extract(
+            &description,
+            &with_headers(
+                "/items",
+                &[
+                    ("cookie", b"session=a; session=\"b c\""),
+                    ("cookie", b"theme=dark"),
+                ],
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(arguments.cookie("session"), Some(&json!("b c")));
+        assert_eq!(arguments.cookie("theme"), Some(&json!("light")));
+    }
+
+    #[test]
+    fn reports_errors_by_location_then_body_errors() {
         let description = RouteDescription::new(Method::POST, "/items/{id}")
+            .parameter(Parameter::cookie("session", Schema::string()))
+            .parameter(Parameter::header("x-count", Schema::integer()))
             .parameter(Parameter::query("tag", Schema::array(Schema::string())))
             .parameter(Parameter::path("id", Schema::integer()))
             .body(Schema::string());
@@ -301,6 +414,16 @@ mod tests {
             Err(vec![
                 ValidationError::at(ErrorKind::IntParsing, json!(["path", "id"]), json!("x")),
                 ValidationError::at(ErrorKind::Missing, json!(["query", "tag"]), json!(null)),
+                ValidationError::at(
+                    ErrorKind::Missing,
+                    json!(["header", "x-count"]),
+                    json!(null)
+                ),
+                ValidationError::at(
+                    ErrorKind::Missing,
+                    json!(["cookie", "session"]),
+                    json!(null)
+                ),
                 ValidationError::at(ErrorKind::Missing, json!(["body"]), json!(null)),
             ])
         );
