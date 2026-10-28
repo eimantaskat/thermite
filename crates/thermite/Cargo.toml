@@ -18,7 +18,7 @@ tracing.workspace = true
 [dev-dependencies]
 reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
-tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "signal", "sync", "time"] }
 
 [lints]
 workspace = true

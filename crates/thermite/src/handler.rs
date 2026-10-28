@@ -7,10 +7,13 @@ use crate::arity::for_each_arity;
 use crate::dependency::DependencyCache;
 use crate::extract::FromRequest;
 use crate::response::IntoResponse;
+use crate::state::RequiredState;
 
 // `Extractors` is the tuple of argument types, so one function type can only match one impl
 pub trait Handler<Extractors>: Send + Sync + 'static {
     fn describe(description: RouteDescription) -> RouteDescription;
+
+    fn require_state(required: &mut RequiredState);
 
     fn call(&self, request: Request, arguments: Arguments)
     -> impl Future<Output = Response> + Send;
@@ -26,6 +29,10 @@ macro_rules! impl_handler {
         {
             fn describe(description: RouteDescription) -> RouteDescription {
                 <($($extractor,)*) as FromRequest>::describe(description)
+            }
+
+            fn require_state(required: &mut RequiredState) {
+                <($($extractor,)*) as FromRequest>::require_state(required);
             }
 
             // each value is named after its type parameter

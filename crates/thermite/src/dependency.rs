@@ -7,6 +7,7 @@ use thermite_core::{Arguments, Request, Response, RouteDescription};
 
 use crate::extract::FromRequest;
 use crate::response::IntoResponse;
+use crate::state::RequiredState;
 
 pub trait Dependency: Clone + Send + 'static {
     type Needs: FromRequest;
@@ -23,6 +24,10 @@ impl<T: Dependency> FromRequest for Depends<T> {
 
     fn describe(description: RouteDescription) -> RouteDescription {
         description.dependency(T::Needs::describe)
+    }
+
+    fn require_state(required: &mut RequiredState) {
+        T::Needs::require_state(required);
     }
 
     async fn from_request(request: &Request, arguments: &Arguments) -> Result<Self, Response> {

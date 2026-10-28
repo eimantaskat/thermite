@@ -3,6 +3,7 @@ use thermite_core::{Arguments, Request, Response, RouteDescription};
 use crate::arity::for_each_arity;
 use crate::extract::FromRequest;
 use crate::response::IntoResponse;
+use crate::state::RequiredState;
 
 macro_rules! impl_from_request_for_tuple {
     ($($extractor:ident),*) => {
@@ -12,6 +13,12 @@ macro_rules! impl_from_request_for_tuple {
             fn describe(description: RouteDescription) -> RouteDescription {
                 $(let description = $extractor::describe(description);)*
                 description
+            }
+
+            // the empty tuple requires nothing
+            #[allow(unused_variables)]
+            fn require_state(required: &mut RequiredState) {
+                $($extractor::require_state(required);)*
             }
 
             // each value is named after its type parameter, and the empty tuple reads and awaits nothing

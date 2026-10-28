@@ -1,4 +1,5 @@
 use std::convert::Infallible;
+use std::error::Error;
 use std::fmt::Display;
 use std::future::{Future, pending};
 use std::io;
@@ -30,6 +31,8 @@ pub enum ServerError {
     Bind { address: String, source: io::Error },
     #[error("could not read the bound address")]
     LocalAddress(#[source] io::Error),
+    #[error("the app failed to start")]
+    Startup(#[source] Box<dyn Error + Send + Sync>),
 }
 
 #[derive(Debug)]
@@ -73,15 +76,17 @@ impl Server {
             .map_err(ServerError::LocalAddress)
     }
 
-    pub async fn serve(self, handler: impl RequestHandler) {
-        self.serve_with_shutdown(handler, pending()).await;
+    pub async fn serve(self, handler: impl RequestHandler) -> Result<(), ServerError> {
+        self.serve_with_shutdown(handler, pending::<()>).await
     }
 
-    pub async fn serve_with_shutdown(
+    // the first shutdown request is graceful, and a second one skips what is left of it, as in uvicorn
+    pub async fn serve_with_shutdown<Requested: Future<Output = ()>>(
         self,
         handler: impl RequestHandler,
-        shutdown: impl Future<Output = ()>,
-    ) {
+        mut shutdown_requested: impl FnMut() -> Requested,
+    ) -> Result<(), ServerError> {
+        handler.startup().await.map_err(ServerError::Startup)?;
         let handler = Arc::new(handler);
         let mut builder = http1::Builder::new();
         builder
@@ -89,7 +94,7 @@ impl Server {
             .header_read_timeout(self.header_read_timeout);
         let graceful = GracefulShutdown::new();
         let mut connections = JoinSet::new();
-        let mut shutdown = std::pin::pin!(shutdown);
+        let mut shutdown = std::pin::pin!(shutdown_requested());
 
         loop {
             tokio::select! {
@@ -118,16 +123,26 @@ impl Server {
         }
 
         drop(self.listener);
-        if tokio::time::timeout(self.shutdown_timeout, graceful.shutdown())
-            .await
-            .is_err()
-        {
-            tracing::warn!(
-                remaining = connections.len(),
-                "shutdown timeout passed, closing the remaining connections"
-            );
+        let stopping = async {
+            if tokio::time::timeout(self.shutdown_timeout, graceful.shutdown())
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    remaining = connections.len(),
+                    "shutdown timeout passed, closing the remaining connections"
+                );
+            }
+            connections.shutdown().await;
+            handler.shutdown().await;
+        };
+        tokio::select! {
+            () = stopping => {}
+            () = shutdown_requested() => {
+                tracing::warn!("shutdown forced, skipping what was left of it");
+            }
         }
-        connections.shutdown().await;
+        Ok(())
     }
 }
 

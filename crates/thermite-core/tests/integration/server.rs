@@ -1,11 +1,12 @@
-use std::future::pending;
+use std::error::Error;
+use std::future::{Future, pending, ready};
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use bytes::Bytes;
 use http::{HeaderValue, StatusCode};
-use thermite_core::{Request, Response, Server, ServerError};
+use thermite_core::{Request, RequestHandler, Response, Server, ServerError};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{Barrier, Notify};
@@ -151,7 +152,7 @@ async fn finishes_requests_in_flight_before_shutting_down() -> TestResult {
 
     let request = tokio::spawn(reqwest::get(server.url("/")));
     timeout(TEST_TIMEOUT, started.notified()).await?;
-    let _ = server.shutdown.send(());
+    server.shutdown.notify_one();
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert!(
         !server.task.is_finished(),
@@ -161,7 +162,7 @@ async fn finishes_requests_in_flight_before_shutting_down() -> TestResult {
     release.notify_one();
     let response = timeout(TEST_TIMEOUT, request).await???;
     assert_eq!(response.text().await?, "finished");
-    timeout(TEST_TIMEOUT, server.task).await??;
+    timeout(TEST_TIMEOUT, server.task).await???;
     Ok(())
 }
 
@@ -277,5 +278,131 @@ async fn reports_the_port_it_bound_to() -> TestResult {
 
     assert!(address.ip().is_loopback());
     assert_ne!(address.port(), 0);
+    Ok(())
+}
+
+#[derive(Clone, Default)]
+struct Events(Arc<Mutex<Vec<&'static str>>>);
+
+impl Events {
+    fn record(&self, event: &'static str) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(event);
+    }
+
+    fn recorded(&self) -> Vec<&'static str> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+// answers at once, except on /hang, which never answers
+struct Lifecycle {
+    events: Events,
+    starts: Result<(), &'static str>,
+}
+
+impl RequestHandler for Lifecycle {
+    fn call(&self, request: Request) -> impl Future<Output = Response> + Send {
+        self.events.record("request");
+        let hangs = request.uri().path() == "/hang";
+        async move {
+            if hangs {
+                pending::<()>().await;
+            }
+            text_response(StatusCode::OK, "")
+        }
+    }
+
+    async fn startup(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+        // long enough for the request sent meanwhile to arrive first, were it accepted
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        self.events.record("startup");
+        self.starts.map_err(Into::into)
+    }
+
+    fn shutdown(&self) -> impl Future<Output = ()> + Send {
+        self.events.record("shutdown");
+        ready(())
+    }
+}
+
+#[tokio::test]
+async fn starts_the_handler_before_the_first_request_and_shuts_it_down_after_the_last() -> TestResult
+{
+    let events = Events::default();
+    let server = RunningServer::start(Lifecycle {
+        events: events.clone(),
+        starts: Ok(()),
+    })
+    .await?;
+
+    let response = reqwest::get(server.url("/")).await?;
+    server.stop().await?;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(events.recorded(), ["startup", "request", "shutdown"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn releases_the_port_without_shutting_down_when_the_handler_fails_to_start() -> TestResult {
+    let events = Events::default();
+    let server = Server::bind("127.0.0.1:0").await?;
+    let address = server.local_address()?;
+
+    let outcome = server
+        .serve(Lifecycle {
+            events: events.clone(),
+            starts: Err("no database"),
+        })
+        .await;
+
+    let Err(error @ ServerError::Startup(_)) = outcome else {
+        return Err(format!("unexpected outcome: {outcome:?}").into());
+    };
+    assert_eq!(error.to_string(), "the app failed to start");
+    assert_eq!(
+        error.source().map(ToString::to_string).as_deref(),
+        Some("no database")
+    );
+    assert_eq!(events.recorded(), ["startup"]);
+    Server::bind(address).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_second_shutdown_request_skips_the_rest_of_the_shutdown() -> TestResult {
+    let events = Events::default();
+    let server = RunningServer::start(Lifecycle {
+        events: events.clone(),
+        starts: Ok(()),
+    })
+    .await?;
+    let hanging = tokio::spawn(reqwest::get(server.url("/hang")));
+    timeout(TEST_TIMEOUT, async {
+        while !events.recorded().contains(&"request") {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+
+    server.shutdown.notify_one();
+    // the port is free once serve has stopped accepting and waits on the hanging request
+    timeout(TEST_TIMEOUT, async {
+        while Server::bind(server.address).await.is_err() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    server.shutdown.notify_one();
+
+    timeout(TEST_TIMEOUT, server.task).await???;
+    assert_eq!(events.recorded(), ["startup", "request"]);
+    hanging.abort();
     Ok(())
 }

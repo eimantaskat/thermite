@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -7,7 +8,7 @@ use http::StatusCode;
 use thermite_core::{RequestHandler, Response, Server, ServerError};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::oneshot;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
@@ -17,8 +18,9 @@ pub const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct RunningServer {
     pub address: SocketAddr,
-    pub shutdown: oneshot::Sender<()>,
-    pub task: JoinHandle<()>,
+    // each notification is one shutdown request: the first is graceful, a second forces it
+    pub shutdown: Arc<Notify>,
+    pub task: JoinHandle<Result<(), ServerError>>,
 }
 
 impl RunningServer {
@@ -32,9 +34,13 @@ impl RunningServer {
     ) -> Result<Self, ServerError> {
         let server = configure(Server::bind("127.0.0.1:0").await?);
         let address = server.local_address()?;
-        let (shutdown, shutdown_signal) = oneshot::channel::<()>();
-        let task = tokio::spawn(server.serve_with_shutdown(handler, async {
-            let _ = shutdown_signal.await;
+        let shutdown = Arc::new(Notify::new());
+        let task = tokio::spawn(server.serve_with_shutdown(handler, {
+            let shutdown = Arc::clone(&shutdown);
+            move || {
+                let shutdown = Arc::clone(&shutdown);
+                async move { shutdown.notified().await }
+            }
         }));
         Ok(Self {
             address,
@@ -48,8 +54,8 @@ impl RunningServer {
     }
 
     pub async fn stop(self) -> TestResult {
-        let _ = self.shutdown.send(());
-        timeout(TEST_TIMEOUT, self.task).await??;
+        self.shutdown.notify_one();
+        timeout(TEST_TIMEOUT, self.task).await???;
         Ok(())
     }
 }

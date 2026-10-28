@@ -1,4 +1,5 @@
-use std::future::Future;
+use std::error::Error;
+use std::future::{Future, ready};
 use std::pin::Pin;
 
 use bytes::Bytes;
@@ -10,6 +11,16 @@ pub type Response = http::Response<Bytes>;
 
 pub trait RequestHandler: Send + Sync + 'static {
     fn call(&self, request: Request) -> impl Future<Output = Response> + Send;
+
+    // the server awaits this before accepting connections, and serves nothing if it fails
+    fn startup(&self) -> impl Future<Output = Result<(), Box<dyn Error + Send + Sync>>> + Send {
+        ready(Ok(()))
+    }
+
+    // the server awaits this once every connection is closed, and only after a successful startup
+    fn shutdown(&self) -> impl Future<Output = ()> + Send {
+        ready(())
+    }
 }
 
 impl<Function, Output> RequestHandler for Function
