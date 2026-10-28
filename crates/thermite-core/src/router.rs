@@ -1,5 +1,7 @@
 mod check;
 mod extract;
+mod path;
+mod table;
 
 use std::future::Future;
 
@@ -11,10 +13,11 @@ use crate::description::RouteDescription;
 use crate::handler::{Endpoint, Request, RequestHandler, Response, RouteHandler};
 use crate::response::json_response;
 use crate::route_error::RouteError;
-use crate::routing::{Lookup, PathPattern, RouteTable};
 use crate::validation::validation_failed;
 use check::check_description;
 use extract::extract_arguments;
+use path::PathPattern;
+use table::{Lookup, RouteTable};
 
 const NOT_FOUND_BODY: &str = r#"{"detail":"Not Found"}"#;
 const METHOD_NOT_ALLOWED_BODY: &str = r#"{"detail":"Method Not Allowed"}"#;

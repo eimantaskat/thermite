@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
+use super::path::PathPattern;
 use crate::description::{Parameter, ParameterLocation, RouteDescription};
 use crate::route_error::RouteError;
-use crate::routing::PathPattern;
 
 pub(super) fn check_description(
     description: &RouteDescription,

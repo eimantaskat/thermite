@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use crate::percent::percent_decode;
+use super::percent::percent_decode;
 
 // like Starlette's parse_qsl with keep_blank_values: `+` is a space and `name` alone has an empty value
 pub(crate) fn parse_query(query: &str) -> Vec<(Cow<'_, str>, Cow<'_, str>)> {
@@ -27,7 +27,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::percent::encode_every_byte;
+    use crate::parse::encode_every_byte;
 
     fn pairs(query: &str) -> Vec<(String, String)> {
         parse_query(query)

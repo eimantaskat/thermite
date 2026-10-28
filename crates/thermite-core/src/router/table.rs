@@ -1,12 +1,10 @@
-mod path;
-
 use std::fmt;
 
 use http::Method;
 
 use crate::route_error::RouteError;
 
-pub(crate) use path::{PathParameters, PathPattern};
+use super::path::{self, PathParameters, PathPattern};
 
 // knows methods and paths only, so routing never depends on what is stored per route
 pub(crate) struct RouteTable<T> {

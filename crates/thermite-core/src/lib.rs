@@ -1,16 +1,12 @@
 #![forbid(unsafe_code)]
 
 mod arguments;
-mod cookie;
 mod description;
 mod handler;
-mod header;
-mod percent;
-mod query;
+mod parse;
 mod response;
 mod route_error;
 mod router;
-mod routing;
 mod schema;
 mod server;
 mod validation;

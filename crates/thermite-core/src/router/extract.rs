@@ -5,13 +5,11 @@ use http::header::{CONTENT_TYPE, COOKIE};
 use serde_json::error::Category;
 use serde_json::{Value, json};
 
+use super::path::PathParameters;
 use crate::arguments::Arguments;
-use crate::cookie::parse_cookies;
 use crate::description::{Parameter, ParameterLocation, RouteDescription};
 use crate::handler::Request;
-use crate::header::decode_latin1;
-use crate::query::parse_query;
-use crate::routing::PathParameters;
+use crate::parse::{decode_latin1, parse_cookies, parse_query};
 use crate::validation::{ErrorKind, Location, ValidationError, collect_all};
 
 pub(super) fn extract_arguments(

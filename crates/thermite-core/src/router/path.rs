@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
-use crate::percent::percent_decode;
+use crate::parse::percent_decode;
 use crate::route_error::RouteError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -183,7 +183,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::percent::encode_every_byte;
+    use crate::parse::encode_every_byte;
 
     fn pattern(path: &str) -> PathPattern {
         PathPattern::parse(path).unwrap()
