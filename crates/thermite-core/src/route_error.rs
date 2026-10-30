@@ -7,6 +7,8 @@ use crate::description::ParameterLocation;
 pub enum RouteError {
     #[error("path `{path}` must start with `/`")]
     MissingLeadingSlash { path: String },
+    #[error("prefix `{prefix}` of `{path}` must start with `/` and must not end with `/`")]
+    InvalidPrefix { prefix: String, path: String },
     #[error("path `{path}` has an invalid parameter segment `{segment}`")]
     InvalidParameter { path: String, segment: String },
     #[error("path `{path}` uses the parameter `{name}` more than once")]

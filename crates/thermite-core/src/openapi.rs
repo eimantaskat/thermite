@@ -233,14 +233,16 @@ mod tests {
         }
     }
 
-    fn router(routes: impl IntoIterator<Item = RouteDescription>) -> Router {
-        routes.into_iter().fold(Router::new(), |router, route| {
+    fn router(descriptions: impl IntoIterator<Item = RouteDescription>) -> Router {
+        let mut router = Router::new();
+        for description in descriptions {
             router
-                .route(route, |_: Request, _: Arguments| async {
+                .route(description, |_: Request, _: Arguments| async {
                     Response::new(Bytes::new())
                 })
-                .unwrap()
-        })
+                .unwrap();
+        }
+        router
     }
 
     #[test]

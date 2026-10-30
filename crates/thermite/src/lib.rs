@@ -7,10 +7,12 @@ mod extract;
 mod handler;
 mod json;
 mod lifespan;
+mod method_routes;
 mod model;
 mod rejection;
 mod resource;
 mod response;
+mod router;
 mod state;
 
 pub use app::App;
@@ -24,6 +26,7 @@ pub use model::{Model, ToSchema};
 pub use rejection::ModelMismatch;
 pub use resource::Resource;
 pub use response::IntoResponse;
+pub use router::Router;
 pub use state::{RequiredState, State};
 pub use thermite_core::{
     Arguments, Field, OpenApiError, Parameter, ParameterLocation, Request, Response,

@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use http::StatusCode;
-use thermite_core::{RequestHandler, Response, Server, ServerError};
+use thermite_core::{
+    RequestHandler, Response, RouteDescription, RouteError, RouteHandler, Router, Server,
+    ServerError,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
@@ -15,6 +18,15 @@ use tokio::time::timeout;
 pub type TestResult = Result<(), Box<dyn Error>>;
 
 pub const TEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub fn one_route(
+    description: RouteDescription,
+    handler: impl RouteHandler,
+) -> Result<Router, RouteError> {
+    let mut router = Router::new();
+    router.route(description, handler)?;
+    Ok(router)
+}
 
 pub struct RunningServer {
     pub address: SocketAddr,

@@ -7,14 +7,18 @@ use thermite_core::{
     Arguments, Docs, Field, OpenApi, Parameter, Request, Response, RouteDescription, Router, Schema,
 };
 
+use crate::support::one_route;
+
 fn get(path: &str) -> Result<Request, http::Error> {
     http::Request::builder().uri(path).body(Bytes::new())
 }
 
 fn router() -> Result<Router, Box<dyn Error>> {
-    Ok(Router::new().route(
+    Ok(one_route(
         RouteDescription::new(Method::PUT, "/items/{id}")
             .with_name("replace_item")
+            .with_tag("items")
+            .with_tag("admin")
             .parameter(Parameter::path("id", Schema::integer()))
             .body(Schema::model(
                 "Item",
@@ -35,10 +39,25 @@ fn documents_a_route_description_built_by_hand() -> Result<(), Box<dyn Error>> {
         document["info"],
         json!({"title": "Items", "version": "0.1.0"})
     );
+    let operation = &document["paths"]["/items/{id}"]["put"];
+    let keys: Vec<&String> = operation
+        .as_object()
+        .ok_or("no operation")?
+        .keys()
+        .collect();
     assert_eq!(
-        document["paths"]["/items/{id}"]["put"]["summary"],
-        "Replace Item"
+        keys,
+        [
+            "tags",
+            "summary",
+            "operationId",
+            "parameters",
+            "requestBody",
+            "responses"
+        ]
     );
+    assert_eq!(operation["tags"], json!(["items", "admin"]));
+    assert_eq!(operation["summary"], "Replace Item");
     assert_eq!(
         document["paths"]["/items/{id}"]["put"]["operationId"],
         "replace_item_items__id__put"

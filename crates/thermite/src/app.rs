@@ -2,41 +2,22 @@ use std::error::Error;
 use std::future::Future;
 
 use http::Method;
-use thermite_core::{
-    Docs, OpenApi, Request, RequestHandler, Response, RouteDescription, RouteError, Router,
-};
+use thermite_core::{Docs, OpenApi, Request, RequestHandler, Response, RouteError};
 use tokio::sync::OnceCell;
 
-use crate::handler::{Handler, HandlerEndpoint, handler_name};
+use crate::handler::Handler;
 use crate::lifespan::Lifespan;
+use crate::method_routes::method_routes;
 use crate::resource::Resource;
-use crate::state::RequiredState;
+use crate::router::{PendingRoute, Router};
 
 #[derive(Debug, Default)]
 pub struct App {
-    router: Router,
+    router: thermite_core::Router,
     lifespan: Lifespan,
     openapi: OpenApi,
     // built when the app starts, once every route is added
     docs: OnceCell<Docs>,
-}
-
-macro_rules! method_routes {
-    ($($name:ident => $method:ident),*) => {
-        $(
-            pub fn $name<Function, Extractors>(
-                self,
-                path: impl Into<String>,
-                handler: Function,
-            ) -> Result<Self, RouteError>
-            where
-                Function: Handler<Extractors>,
-                Extractors: 'static,
-            {
-                self.route(Method::$method, path, handler)
-            }
-        )*
-    };
 }
 
 impl App {
@@ -104,32 +85,19 @@ impl App {
         Function: Handler<Extractors>,
         Extractors: 'static,
     {
-        let path = path.into();
-        let needed_by = format!("{method} {path}");
-        let mut description = RouteDescription::new(method, path);
-        if let Some(name) = handler_name::<Function>() {
-            description = description.with_name(name);
-        }
-        let description = <Function as Handler<Extractors>>::describe(description);
-        self.router = self
-            .router
-            .route(description, HandlerEndpoint::<_, Extractors>::new(handler))?;
-        let mut required = RequiredState::default();
-        <Function as Handler<Extractors>>::require_state(&mut required);
-        self.lifespan.require(needed_by, required);
+        PendingRoute::new(method, path.into(), handler)
+            .add_to(&mut self.router, &mut self.lifespan)?;
         Ok(self)
     }
 
-    method_routes!(
-        get => GET,
-        post => POST,
-        put => PUT,
-        patch => PATCH,
-        delete => DELETE,
-        head => HEAD,
-        options => OPTIONS,
-        trace => TRACE
-    );
+    method_routes!(Result<Self, RouteError>);
+
+    pub fn include_router(mut self, router: Router) -> Result<Self, RouteError> {
+        for route in router.into_routes() {
+            route.add_to(&mut self.router, &mut self.lifespan)?;
+        }
+        Ok(self)
+    }
 }
 
 impl RequestHandler for App {

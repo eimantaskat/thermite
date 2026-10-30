@@ -32,6 +32,7 @@ struct Route {
     // the table orders routes by how specific they are, while the docs list them as registered
     registered: usize,
     name: Option<String>,
+    tags: Vec<String>,
     inputs: Inputs,
     endpoint: Box<dyn Endpoint>,
 }
@@ -41,6 +42,7 @@ pub(crate) struct Operation<'router> {
     pub(crate) method: &'router Method,
     pub(crate) path: &'router str,
     pub(crate) name: Option<&'router str>,
+    pub(crate) tags: &'router [String],
     pub(crate) parameters: &'router [Parameter],
     pub(crate) body: Option<&'router Schema>,
 }
@@ -65,14 +67,22 @@ impl Router {
         Self::default()
     }
 
+    // a route that fails to register leaves the router as it was
     pub fn route(
-        mut self,
+        &mut self,
         description: RouteDescription,
         handler: impl RouteHandler,
-    ) -> Result<Self, RouteError> {
+    ) -> Result<(), RouteError> {
+        if let Some(prefix) = description.invalid_prefix() {
+            return Err(RouteError::InvalidPrefix {
+                prefix: prefix.to_owned(),
+                path: description.path().to_owned(),
+            });
+        }
         let pattern = PathPattern::parse(description.path())?;
         let method = description.method().clone();
         let name = description.name().map(str::to_owned);
+        let tags = description.tags().to_vec();
         let inputs = check_description(description, &pattern)?;
         let registered = self.routes.len();
         self.routes.insert(
@@ -81,11 +91,11 @@ impl Router {
             Route {
                 registered,
                 name,
+                tags,
                 inputs,
                 endpoint: Box::new(handler),
             },
-        )?;
-        Ok(self)
+        )
     }
 
     pub(crate) fn operations(&self) -> Vec<Operation<'_>> {
@@ -97,6 +107,7 @@ impl Router {
                 method,
                 path: pattern.as_str(),
                 name: route.name.as_deref(),
+                tags: &route.tags,
                 parameters: &route.inputs.parameters,
                 body: route.inputs.body.as_ref(),
             })
@@ -157,7 +168,8 @@ mod tests {
 
     #[test]
     fn debug_output_lists_the_routes() {
-        let router = Router::new()
+        let mut router = Router::new();
+        router
             .route(
                 RouteDescription::new(Method::POST, "/items"),
                 |_request: Request, _arguments: Arguments| async { Response::new(Bytes::new()) },

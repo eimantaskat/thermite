@@ -2,10 +2,10 @@ use bytes::Bytes;
 use http::{Method, StatusCode};
 use serde_json::{Value, json};
 use thermite_core::{
-    Arguments, Field, Parameter, Request, Response, RouteDescription, RouteHandler, Router, Schema,
+    Arguments, Field, Parameter, Request, Response, RouteDescription, RouteHandler, Schema,
 };
 
-use crate::support::{RunningServer, TestResult, text_response};
+use crate::support::{RunningServer, TestResult, one_route, text_response};
 
 fn answering_called() -> impl RouteHandler {
     |_request: Request, _arguments: Arguments| async { text_response(StatusCode::OK, "called") }
@@ -45,7 +45,7 @@ async fn passes_validated_path_query_and_body_values_to_the_handler() -> TestRes
         .parameter(Parameter::query("limit", Schema::integer()).with_default(10))
         .parameter(Parameter::query("active", Schema::boolean()))
         .body(item_schema());
-    let router = Router::new().route(
+    let router = one_route(
         description,
         |_request: Request, arguments: Arguments| async move {
             let echoed = json!({
@@ -87,8 +87,7 @@ async fn passes_validated_path_query_and_body_values_to_the_handler() -> TestRes
 async fn returns_422_in_fastapi_format_when_a_path_parameter_does_not_parse() -> TestResult {
     let description = RouteDescription::new(Method::GET, "/items/{item_id}")
         .parameter(Parameter::path("item_id", Schema::integer()));
-    let server =
-        RunningServer::start(Router::new().route(description, answering_called())?).await?;
+    let server = RunningServer::start(one_route(description, answering_called())?).await?;
 
     let response = reqwest::get(server.url("/items/abc")).await?;
 
@@ -109,8 +108,7 @@ async fn lists_every_invalid_query_and_body_value_in_one_response() -> TestResul
     let description = RouteDescription::new(Method::POST, "/items")
         .parameter(Parameter::query("limit", Schema::integer()))
         .body(item_schema());
-    let server =
-        RunningServer::start(Router::new().route(description, answering_called())?).await?;
+    let server = RunningServer::start(one_route(description, answering_called())?).await?;
 
     let response = post_json(
         &server,
@@ -155,8 +153,7 @@ async fn lists_every_invalid_query_and_body_value_in_one_response() -> TestResul
 #[tokio::test]
 async fn returns_422_when_the_body_is_not_valid_json() -> TestResult {
     let description = RouteDescription::new(Method::POST, "/items").body(item_schema());
-    let server =
-        RunningServer::start(Router::new().route(description, answering_called())?).await?;
+    let server = RunningServer::start(one_route(description, answering_called())?).await?;
 
     let response = post_json(&server, "/items", r#"{"name": }"#).await?;
 
@@ -174,8 +171,7 @@ async fn returns_422_when_the_body_is_not_valid_json() -> TestResult {
 #[tokio::test]
 async fn returns_422_when_a_required_body_is_missing() -> TestResult {
     let description = RouteDescription::new(Method::POST, "/items").body(item_schema());
-    let server =
-        RunningServer::start(Router::new().route(description, answering_called())?).await?;
+    let server = RunningServer::start(one_route(description, answering_called())?).await?;
 
     let response = reqwest::Client::new()
         .post(server.url("/items"))
@@ -212,8 +208,7 @@ fn description_errors_name_the_route_and_the_parameter() {
     ];
 
     let messages = descriptions.map(|description| {
-        Router::new()
-            .route(description, answering_called())
+        one_route(description, answering_called())
             .err()
             .map(|error| error.to_string())
     });

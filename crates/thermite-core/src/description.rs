@@ -10,6 +10,9 @@ pub struct RouteDescription {
     method: Method,
     path: String,
     name: Option<String>,
+    tags: Vec<String>,
+    // kept so that registering the route can report it, like a second body
+    invalid_prefix: Option<String>,
     declarations: Declarations,
 }
 
@@ -37,6 +40,8 @@ impl RouteDescription {
             method,
             path: path.into(),
             name: None,
+            tags: Vec::new(),
+            invalid_prefix: None,
             declarations: Declarations::default(),
         }
     }
@@ -45,6 +50,24 @@ impl RouteDescription {
     #[must_use]
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = Some(name.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
+        self.tags.push(tag.into());
+        self
+    }
+
+    // like FastAPI, a prefix starts with `/` and does not end with one, so joining never doubles a slash
+    #[must_use]
+    pub fn with_prefix(mut self, prefix: impl AsRef<str>) -> Self {
+        let prefix = prefix.as_ref();
+        let valid = prefix.is_empty() || (prefix.starts_with('/') && !prefix.ends_with('/'));
+        if !valid && self.invalid_prefix.is_none() {
+            self.invalid_prefix = Some(prefix.to_owned());
+        }
+        self.path.insert_str(0, prefix);
         self
     }
 
@@ -71,16 +94,26 @@ impl RouteDescription {
         self
     }
 
-    pub(crate) fn method(&self) -> &Method {
+    #[must_use]
+    pub fn method(&self) -> &Method {
         &self.method
     }
 
-    pub(crate) fn path(&self) -> &str {
+    #[must_use]
+    pub fn path(&self) -> &str {
         &self.path
     }
 
     pub(crate) fn name(&self) -> Option<&str> {
         self.name.as_deref()
+    }
+
+    pub(crate) fn tags(&self) -> &[String] {
+        &self.tags
+    }
+
+    pub(crate) fn invalid_prefix(&self) -> Option<&str> {
+        self.invalid_prefix.as_deref()
     }
 
     pub(crate) fn into_declarations(self) -> Declarations {

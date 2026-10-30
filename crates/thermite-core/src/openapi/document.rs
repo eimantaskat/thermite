@@ -51,6 +51,9 @@ fn describe<'router>(
     components: &mut Components<'router>,
 ) -> Result<JsonSchema, NameConflict> {
     let mut described = JsonSchema::new();
+    if !operation.tags.is_empty() {
+        described.insert("tags".to_owned(), operation.tags.into());
+    }
     if let Some(name) = operation.name {
         described.insert("summary".to_owned(), title(name).into());
     }
@@ -189,6 +192,7 @@ mod tests {
             method: &Method::GET,
             path,
             name,
+            tags: &[],
             parameters: &[],
             body: None,
         }
