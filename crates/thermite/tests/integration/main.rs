@@ -1,6 +1,7 @@
 mod app;
 mod dependencies;
 mod extractors;
+mod middleware;
 mod openapi;
 mod responses;
 mod routers;

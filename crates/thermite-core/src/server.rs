@@ -155,7 +155,7 @@ fn serve_connection<Handler: RequestHandler>(
 ) -> impl Future<Output = ()> + Send + 'static {
     let service = service_fn(move |request| {
         let handler = Arc::clone(&handler);
-        async move { Ok::<_, Infallible>(handle_request(handler.as_ref(), request).await) }
+        async move { Ok::<_, Infallible>(handle_request(&handler, request).await) }
     });
     let connection = graceful.watch(builder.serve_connection(TokioIo::new(stream), service));
 
@@ -173,7 +173,7 @@ fn log_if_failed(finished: Result<(), JoinError>) {
 }
 
 async fn handle_request(
-    handler: &impl RequestHandler,
+    handler: &Arc<impl RequestHandler>,
     request: http::Request<Incoming>,
 ) -> http::Response<Full<Bytes>> {
     let (parts, body) = request.into_parts();

@@ -307,7 +307,7 @@ struct Lifecycle {
 }
 
 impl RequestHandler for Lifecycle {
-    fn call(&self, request: Request) -> impl Future<Output = Response> + Send {
+    fn call(self: &Arc<Self>, request: Request) -> impl Future<Output = Response> + Send + 'static {
         self.events.record("request");
         let hangs = request.uri().path() == "/hang";
         async move {

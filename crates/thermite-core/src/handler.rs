@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::future::{Future, ready};
 use std::pin::Pin;
+use std::sync::Arc;
 
 use bytes::Bytes;
 
@@ -9,8 +10,9 @@ use crate::arguments::Arguments;
 pub type Request = http::Request<Bytes>;
 pub type Response = http::Response<Bytes>;
 
+// the server holds the handler in an Arc, which a 'static future such as a middleware's Next can keep
 pub trait RequestHandler: Send + Sync + 'static {
-    fn call(&self, request: Request) -> impl Future<Output = Response> + Send;
+    fn call(self: &Arc<Self>, request: Request) -> impl Future<Output = Response> + Send + 'static;
 
     // the server awaits this before accepting connections, and serves nothing if it fails
     fn startup(&self) -> impl Future<Output = Result<(), Box<dyn Error + Send + Sync>>> + Send {
@@ -26,9 +28,9 @@ pub trait RequestHandler: Send + Sync + 'static {
 impl<Function, Output> RequestHandler for Function
 where
     Function: Fn(Request) -> Output + Send + Sync + 'static,
-    Output: Future<Output = Response> + Send,
+    Output: Future<Output = Response> + Send + 'static,
 {
-    fn call(&self, request: Request) -> impl Future<Output = Response> + Send {
+    fn call(self: &Arc<Self>, request: Request) -> impl Future<Output = Response> + Send + 'static {
         self(request)
     }
 }

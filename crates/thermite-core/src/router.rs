@@ -4,6 +4,7 @@ mod path;
 mod table;
 
 use std::future::Future;
+use std::sync::Arc;
 
 use http::header::ALLOW;
 use http::{HeaderValue, Method, StatusCode};
@@ -129,10 +130,8 @@ impl Router {
             }
         }
     }
-}
 
-impl RequestHandler for Router {
-    fn call(&self, request: Request) -> impl Future<Output = Response> + Send {
+    pub fn handle(&self, request: Request) -> impl Future<Output = Response> + Send + '_ {
         let dispatch = self.dispatch(&request);
         async move {
             match dispatch {
@@ -142,6 +141,13 @@ impl RequestHandler for Router {
                 Dispatch::Respond(response) => response,
             }
         }
+    }
+}
+
+impl RequestHandler for Router {
+    fn call(self: &Arc<Self>, request: Request) -> impl Future<Output = Response> + Send + 'static {
+        let router = Arc::clone(self);
+        async move { router.handle(request).await }
     }
 }
 

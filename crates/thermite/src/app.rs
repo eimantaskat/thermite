@@ -1,8 +1,12 @@
 use std::error::Error;
 use std::future::Future;
+use std::sync::Arc;
 
 use http::Method;
-use thermite_core::{Docs, OpenApi, Request, RequestHandler, Response, RouteError};
+use thermite_core::{
+    Docs, Middleware, MiddlewareStack, Next, OpenApi, Pipeline, Request, RequestHandler, Response,
+    RouteError,
+};
 use tokio::sync::OnceCell;
 
 use crate::handler::Handler;
@@ -15,6 +19,7 @@ use crate::router::{PendingRoute, Router};
 pub struct App {
     router: thermite_core::Router,
     lifespan: Lifespan,
+    middleware: MiddlewareStack,
     openapi: OpenApi,
     // built when the app starts, once every route is added
     docs: OnceCell<Docs>,
@@ -68,6 +73,13 @@ impl App {
         self
     }
 
+    // wraps everything the app answers, the docs and 404s included, as in Starlette
+    #[must_use]
+    pub fn middleware(mut self, middleware: impl Middleware) -> Self {
+        self.middleware.push(middleware);
+        self
+    }
+
     // resources start in the order added, so each can need the ones before it
     #[must_use]
     pub fn resource<T: Resource>(mut self) -> Self {
@@ -100,13 +112,26 @@ impl App {
     }
 }
 
-impl RequestHandler for App {
-    async fn call(&self, mut request: Request) -> Response {
+impl Pipeline for App {
+    fn middleware_stack(&self) -> &MiddlewareStack {
+        &self.middleware
+    }
+
+    async fn endpoint(&self, request: Request) -> Response {
         if let Some(response) = self.docs.get().and_then(|docs| docs.respond(&request)) {
             return response;
         }
+        self.router.handle(request).await
+    }
+}
+
+impl RequestHandler for App {
+    fn call(
+        self: &Arc<Self>,
+        mut request: Request,
+    ) -> impl Future<Output = Response> + Send + 'static {
         self.lifespan.hand_state_to(&mut request);
-        self.router.call(request).await
+        Next::start(self, request)
     }
 
     // the docs first, since they start nothing that would need stopping when they fail

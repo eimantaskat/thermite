@@ -3,6 +3,7 @@
 mod arguments;
 mod description;
 mod handler;
+mod middleware;
 mod openapi;
 mod parse;
 mod response;
@@ -15,6 +16,7 @@ mod validation;
 pub use arguments::Arguments;
 pub use description::{Parameter, ParameterLocation, RouteDescription};
 pub use handler::{Request, RequestHandler, Response, RouteHandler};
+pub use middleware::{Middleware, MiddlewareStack, Next, Pipeline};
 pub use openapi::{Docs, OpenApi, OpenApiError};
 pub use route_error::RouteError;
 pub use router::Router;
