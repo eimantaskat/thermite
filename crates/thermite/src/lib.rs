@@ -3,6 +3,8 @@
 mod app;
 mod arity;
 mod dependency;
+mod error;
+mod exception;
 mod extract;
 mod handler;
 mod json;
@@ -17,6 +19,7 @@ mod state;
 
 pub use app::App;
 pub use dependency::{Dependency, Depends};
+pub use error::Error;
 pub use extract::{Cookie, FromRequest, Header, Path, Query};
 pub use handler::Handler;
 pub use http::{self, Method, StatusCode};
@@ -29,6 +32,7 @@ pub use response::IntoResponse;
 pub use router::Router;
 pub use state::{RequiredState, State};
 pub use thermite_core::{
-    Arguments, Field, Middleware, Next, OpenApiError, Parameter, ParameterLocation, Request,
-    Response, RouteDescription, RouteError, Schema, Server, ServerError, Value,
+    Arguments, Field, HttpError, Middleware, Next, OpenApiError, Parameter, ParameterLocation,
+    Request, RequestValidationError, Response, RouteDescription, RouteError, Schema, Server,
+    ServerError, Value,
 };

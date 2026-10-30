@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::error::Error as StdError;
 use std::future::Future;
 use std::sync::Arc;
 
@@ -9,10 +9,12 @@ use thermite_core::{
 };
 use tokio::sync::OnceCell;
 
+use crate::exception::ExceptionHandlers;
 use crate::handler::Handler;
 use crate::lifespan::Lifespan;
 use crate::method_routes::method_routes;
 use crate::resource::Resource;
+use crate::response::IntoResponse;
 use crate::router::{PendingRoute, Router};
 
 #[derive(Debug, Default)]
@@ -20,6 +22,7 @@ pub struct App {
     router: thermite_core::Router,
     lifespan: Lifespan,
     middleware: MiddlewareStack,
+    exception_handlers: ExceptionHandlers,
     openapi: OpenApi,
     // built when the app starts, once every route is added
     docs: OnceCell<Docs>,
@@ -80,6 +83,20 @@ impl App {
         self
     }
 
+    // these run inside the middleware, which sees the replaced response, as in Starlette
+    #[must_use]
+    pub fn exception_handler<E, Output>(
+        mut self,
+        handler: impl Fn(&E) -> Output + Send + Sync + 'static,
+    ) -> Self
+    where
+        E: StdError + Send + Sync + 'static,
+        Output: IntoResponse,
+    {
+        self.exception_handlers.add(handler);
+        self
+    }
+
     // resources start in the order added, so each can need the ones before it
     #[must_use]
     pub fn resource<T: Resource>(mut self) -> Self {
@@ -121,7 +138,8 @@ impl Pipeline for App {
         if let Some(response) = self.docs.get().and_then(|docs| docs.respond(&request)) {
             return response;
         }
-        self.router.handle(request).await
+        let response = self.router.handle(request).await;
+        self.exception_handlers.handle(response)
     }
 }
 
@@ -135,7 +153,7 @@ impl RequestHandler for App {
     }
 
     // the docs first, since they start nothing that would need stopping when they fail
-    async fn startup(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
+    async fn startup(&self) -> Result<(), Box<dyn StdError + Send + Sync>> {
         self.docs
             .get_or_try_init(|| async { Docs::new(&self.openapi, &self.router) })
             .await?;

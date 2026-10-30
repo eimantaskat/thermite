@@ -1,5 +1,6 @@
 mod app;
 mod dependencies;
+mod exceptions;
 mod extractors;
 mod middleware;
 mod openapi;
