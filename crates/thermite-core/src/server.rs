@@ -1,3 +1,4 @@
+mod access;
 mod panic;
 
 use std::convert::Infallible;
@@ -22,6 +23,7 @@ use tokio::task::{JoinError, JoinSet};
 
 use crate::handler::{RequestHandler, Response};
 use crate::http_error::HttpError;
+use access::AccessLog;
 use panic::call_catching_panics;
 
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
@@ -171,7 +173,12 @@ fn serve_connection<Handler: RequestHandler>(
 ) -> impl Future<Output = ()> + Send + 'static {
     let service = service_fn(move |request| {
         let handler = Arc::clone(&handler);
-        async move { Ok::<_, Infallible>(handle_request(&handler, request, body_limit).await) }
+        async move {
+            let access = AccessLog::start(peer_address, &request);
+            let response = handle_request(&handler, request, body_limit).await;
+            access.finish(response.status());
+            Ok::<_, Infallible>(response)
+        }
     });
     let connection = graceful.watch(builder.serve_connection(TokioIo::new(stream), service));
 
