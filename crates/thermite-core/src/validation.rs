@@ -1,8 +1,11 @@
+use std::fmt;
+use std::sync::Arc;
+
 use http::StatusCode;
 use serde_json::{Value, json};
 
 use crate::handler::Response;
-use crate::response::json_response;
+use crate::response::{attach_error, json_response};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorKind {
@@ -174,17 +177,55 @@ pub(crate) fn collect_all<T>(
     }
 }
 
+// FastAPI's RequestValidationError, whose errors are the `detail` of its 422
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestValidationError {
+    errors: Vec<Value>,
+}
+
+impl RequestValidationError {
+    #[must_use]
+    pub fn errors(&self) -> &[Value] {
+        &self.errors
+    }
+}
+
+impl fmt::Display for RequestValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let count = self.errors.len();
+        let plural = if count == 1 { "" } else { "s" };
+        write!(formatter, "{count} validation error{plural} in the request")
+    }
+}
+
+impl std::error::Error for RequestValidationError {}
+
 pub(crate) fn validation_failed(errors: Vec<ValidationError>) -> Response {
-    let detail: Vec<Value> = errors.into_iter().map(ValidationError::into_json).collect();
-    json_response(
+    let errors: Vec<Value> = errors.into_iter().map(ValidationError::into_json).collect();
+    let mut response = json_response(
         StatusCode::UNPROCESSABLE_ENTITY,
-        json!({ "detail": detail }).to_string(),
-    )
+        json!({ "detail": errors }).to_string(),
+    );
+    attach_error(&mut response, Arc::new(RequestValidationError { errors }));
+    response
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_request_validation_error_counts_its_errors() {
+        let one = RequestValidationError {
+            errors: vec![json!({"type": "missing"})],
+        };
+        let two = RequestValidationError {
+            errors: vec![json!({"type": "missing"}), json!({"type": "int_parsing"})],
+        };
+
+        assert_eq!(one.to_string(), "1 validation error in the request");
+        assert_eq!(two.to_string(), "2 validation errors in the request");
+    }
 
     #[test]
     fn uses_the_type_and_message_pairs_of_pydantic() {

@@ -219,18 +219,89 @@ async fn closes_connections_that_stop_sending_headers() -> TestResult {
 }
 
 #[tokio::test]
-async fn keeps_serving_after_a_handler_panics() -> TestResult {
-    let server = RunningServer::start(|request: Request| async move {
-        assert_ne!(request.uri().path(), "/panic", "handler failed");
-        text_response(StatusCode::OK, "still serving")
+async fn answers_500_and_keeps_serving_when_a_handler_panics() -> TestResult {
+    let server = RunningServer::start(|request: Request| {
+        let path = request.uri().path().to_owned();
+        assert_ne!(path, "/panic-before", "failed before the future");
+        async move {
+            assert_ne!(path, "/panic-inside", "failed inside the future");
+            text_response(StatusCode::OK, "still serving")
+        }
     })
     .await?;
 
-    let failed = reqwest::get(server.url("/panic")).await;
-    let response = reqwest::get(server.url("/")).await?;
+    for path in ["/panic-before", "/panic-inside"] {
+        let failed = reqwest::get(server.url(path)).await?;
 
-    assert!(failed.is_err(), "panicking handler produced a response");
+        assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR, "{path}");
+        assert_eq!(
+            failed.headers()["content-type"],
+            "text/plain; charset=utf-8"
+        );
+        assert_eq!(failed.text().await?, "Internal Server Error");
+    }
+    let response = reqwest::get(server.url("/")).await?;
     assert_eq!(response.text().await?, "still serving");
+    server.stop().await
+}
+
+fn echoing_body_length() -> impl RequestHandler {
+    |request: Request| async move { Response::new(request.body().len().to_string().into()) }
+}
+
+#[tokio::test]
+async fn answers_413_when_the_body_is_larger_than_the_limit() -> TestResult {
+    let server =
+        RunningServer::start_configured(|server| server.with_body_limit(4), echoing_body_length())
+            .await?;
+    let client = reqwest::Client::new();
+
+    let fits = client.post(server.url("/")).body("abcd").send().await?;
+    let declared = client.post(server.url("/")).body("abcde").send().await?;
+    let streamed = send_raw(
+        server.address,
+        b"POST / HTTP/1.1\r\nhost: localhost\r\ntransfer-encoding: chunked\r\n\r\n3\r\nabc\r\n3\r\ndef\r\n0\r\n\r\n",
+    )
+    .await?;
+
+    assert_eq!(fits.text().await?, "4");
+    assert_eq!(declared.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(declared.headers()["content-type"], "application/json");
+    assert_eq!(declared.text().await?, r#"{"detail":"Content Too Large"}"#);
+    assert!(
+        streamed.starts_with("HTTP/1.1 413"),
+        "unexpected response: {streamed}"
+    );
+    server.stop().await
+}
+
+#[tokio::test]
+async fn accepts_bodies_up_to_2_mib_by_default() -> TestResult {
+    let server = RunningServer::start(echoing_body_length()).await?;
+    let client = reqwest::Client::new();
+    let limit = 2 * 1024 * 1024;
+
+    let fits = client
+        .post(server.url("/"))
+        .body(vec![b'a'; limit])
+        .send()
+        .await?;
+    // refused before the body is read, so a client still sending it would see the connection reset
+    let too_large = send_raw(
+        server.address,
+        format!(
+            "POST / HTTP/1.1\r\nhost: localhost\r\ncontent-length: {}\r\n\r\n",
+            limit + 1
+        )
+        .as_bytes(),
+    )
+    .await?;
+
+    assert_eq!(fits.text().await?, limit.to_string());
+    assert!(
+        too_large.starts_with("HTTP/1.1 413"),
+        "unexpected response: {too_large}"
+    );
     server.stop().await
 }
 

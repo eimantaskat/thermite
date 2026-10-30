@@ -12,7 +12,7 @@ use http::{HeaderValue, Method, StatusCode};
 use crate::arguments::Arguments;
 use crate::description::{Parameter, RouteDescription};
 use crate::handler::{Endpoint, Request, RequestHandler, Response, RouteHandler};
-use crate::response::json_response;
+use crate::http_error::HttpError;
 use crate::route_error::RouteError;
 use crate::schema::Schema;
 use crate::validation::validation_failed;
@@ -20,9 +20,6 @@ use check::{Inputs, check_description};
 use extract::extract_arguments;
 use path::PathPattern;
 use table::{Lookup, RouteTable};
-
-const NOT_FOUND_BODY: &str = r#"{"detail":"Not Found"}"#;
-const METHOD_NOT_ALLOWED_BODY: &str = r#"{"detail":"Method Not Allowed"}"#;
 
 #[derive(Debug)]
 pub struct Router {
@@ -125,9 +122,9 @@ impl Router {
                 Err(errors) => Dispatch::Respond(validation_failed(errors)),
             },
             Lookup::MethodNotAllowed { allowed } => Dispatch::Respond(method_not_allowed(&allowed)),
-            Lookup::NotFound => {
-                Dispatch::Respond(json_response(StatusCode::NOT_FOUND, NOT_FOUND_BODY))
-            }
+            Lookup::NotFound => Dispatch::Respond(
+                HttpError::new(StatusCode::NOT_FOUND, "Not Found").into_response(),
+            ),
         }
     }
 
@@ -152,7 +149,7 @@ impl RequestHandler for Router {
 }
 
 fn method_not_allowed(allowed: &[Method]) -> Response {
-    let mut response = json_response(StatusCode::METHOD_NOT_ALLOWED, METHOD_NOT_ALLOWED_BODY);
+    let mut error = HttpError::new(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed");
     let allowed = allowed
         .iter()
         .map(Method::as_str)
@@ -160,9 +157,9 @@ fn method_not_allowed(allowed: &[Method]) -> Response {
         .join(", ");
     // method names are HTTP tokens, so this always succeeds
     if let Ok(value) = HeaderValue::from_str(&allowed) {
-        response.headers_mut().insert(ALLOW, value);
+        error = error.with_header(ALLOW, value);
     }
-    response
+    error.into_response()
 }
 
 #[cfg(test)]

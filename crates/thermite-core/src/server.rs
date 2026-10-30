@@ -1,3 +1,5 @@
+mod panic;
+
 use std::convert::Infallible;
 use std::error::Error;
 use std::fmt::Display;
@@ -9,8 +11,8 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use http::StatusCode;
-use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
+use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
+use hyper::body::{Body, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioIo, TokioTimer};
@@ -19,10 +21,13 @@ use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
 use tokio::task::{JoinError, JoinSet};
 
 use crate::handler::{RequestHandler, Response};
+use crate::http_error::HttpError;
+use panic::call_catching_panics;
 
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_BODY_LIMIT: usize = 2 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -40,6 +45,7 @@ pub struct Server {
     listener: TcpListener,
     shutdown_timeout: Duration,
     header_read_timeout: Duration,
+    body_limit: usize,
 }
 
 impl Server {
@@ -55,6 +61,7 @@ impl Server {
             listener,
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
             header_read_timeout: DEFAULT_HEADER_READ_TIMEOUT,
+            body_limit: DEFAULT_BODY_LIMIT,
         })
     }
 
@@ -67,6 +74,13 @@ impl Server {
     #[must_use]
     pub fn with_header_read_timeout(mut self, timeout: Duration) -> Self {
         self.header_read_timeout = timeout;
+        self
+    }
+
+    // in bytes; it also bounds the JSON parsing and validation that run on the async worker threads
+    #[must_use]
+    pub fn with_body_limit(mut self, bytes: usize) -> Self {
+        self.body_limit = bytes;
         self
     }
 
@@ -106,6 +120,7 @@ impl Server {
                             stream,
                             peer_address,
                             Arc::clone(&handler),
+                            self.body_limit,
                         ));
                     }
                     Err(error) => {
@@ -152,10 +167,11 @@ fn serve_connection<Handler: RequestHandler>(
     stream: TcpStream,
     peer_address: SocketAddr,
     handler: Arc<Handler>,
+    body_limit: usize,
 ) -> impl Future<Output = ()> + Send + 'static {
     let service = service_fn(move |request| {
         let handler = Arc::clone(&handler);
-        async move { Ok::<_, Infallible>(handle_request(&handler, request).await) }
+        async move { Ok::<_, Infallible>(handle_request(&handler, request, body_limit).await) }
     });
     let connection = graceful.watch(builder.serve_connection(TokioIo::new(stream), service));
 
@@ -175,19 +191,29 @@ fn log_if_failed(finished: Result<(), JoinError>) {
 async fn handle_request(
     handler: &Arc<impl RequestHandler>,
     request: http::Request<Incoming>,
+    body_limit: usize,
 ) -> http::Response<Full<Bytes>> {
     let (parts, body) = request.into_parts();
-    let response = match body.collect().await {
+    // a declared length is refused before any of the body is read
+    if body.size_hint().lower() > body_limit as u64 {
+        return content_too_large().map(Full::new);
+    }
+    let response = match Limited::new(body, body_limit).collect().await {
         Ok(collected) => {
             let request = http::Request::from_parts(parts, collected.to_bytes());
-            handler.call(request).await
+            call_catching_panics(handler, request).await
         }
+        Err(error) if error.is::<LengthLimitError>() => content_too_large(),
         Err(error) => {
             tracing::debug!(%error, "failed to read the request body");
             status_response(StatusCode::BAD_REQUEST)
         }
     };
     response.map(Full::new)
+}
+
+fn content_too_large() -> Response {
+    HttpError::new(StatusCode::PAYLOAD_TOO_LARGE, "Content Too Large").into_response()
 }
 
 fn status_response(status: StatusCode) -> Response {
