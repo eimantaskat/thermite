@@ -12,7 +12,8 @@ use crate::response::{attach_error, json_response};
 pub struct HttpError {
     status: StatusCode,
     detail: Value,
-    headers: HeaderMap,
+    // boxed, since a HeaderMap alone would make the error too large to return cheaply
+    headers: Box<HeaderMap>,
 }
 
 impl HttpError {
@@ -21,7 +22,7 @@ impl HttpError {
         Self {
             status,
             detail: detail.into(),
-            headers: HeaderMap::new(),
+            headers: Box::default(),
         }
     }
 
@@ -50,7 +51,7 @@ impl HttpError {
     #[must_use]
     pub fn into_response(self) -> Response {
         let mut response = json_response(self.status, json!({ "detail": self.detail }).to_string());
-        response.headers_mut().extend(self.headers.clone());
+        response.headers_mut().extend(self.headers.as_ref().clone());
         attach_error(&mut response, Arc::new(self));
         response
     }
@@ -88,6 +89,16 @@ mod tests {
         assert_eq!(response.body(), r#"{"detail":"Method Not Allowed"}"#);
         let attached = response_error(&response).and_then(|error| error.downcast_ref());
         assert_eq!(attached, Some(&error));
+    }
+
+    // clippy's result_large_err warns from 128 bytes, in the code of every user returning one
+    #[test]
+    fn is_small_enough_to_return_in_a_result_without_a_lint() {
+        assert!(
+            size_of::<HttpError>() < 128,
+            "{} bytes",
+            size_of::<HttpError>()
+        );
     }
 
     #[test]
