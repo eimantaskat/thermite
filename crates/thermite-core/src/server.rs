@@ -1,6 +1,7 @@
 mod access;
 mod in_process;
 mod panic;
+mod response_body;
 
 use std::convert::Infallible;
 use std::error::Error;
@@ -13,19 +14,22 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use http::StatusCode;
-use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
+use http_body_util::{BodyExt, LengthLimitError, Limited};
 use hyper::body::{Body, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::server::graceful::GracefulShutdown;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
+use tokio::sync::mpsc;
 use tokio::task::{JoinError, JoinSet};
 
+use crate::background::take_background_tasks;
 use crate::handler::{RequestHandler, Response};
 use crate::http_error::HttpError;
 use access::AccessLog;
-use panic::call_catching_panics;
+use panic::{call_catching_panics, run_catching_panics};
+use response_body::ResponseBody;
 
 pub use in_process::InProcessServer;
 
@@ -144,13 +148,20 @@ impl Server {
 
         drop(self.listener);
         let stopping = async {
-            if tokio::time::timeout(self.shutdown_timeout, graceful.shutdown())
+            let finishing = async {
+                graceful.shutdown().await;
+                // a connection still runs the background tasks of its responses
+                while let Some(finished) = connections.join_next().await {
+                    log_if_failed(finished);
+                }
+            };
+            if tokio::time::timeout(self.shutdown_timeout, finishing)
                 .await
                 .is_err()
             {
                 tracing::warn!(
                     remaining = connections.len(),
-                    "shutdown timeout passed, closing the remaining connections"
+                    "shutdown timeout passed, closing the remaining connections and their tasks"
                 );
             }
             connections.shutdown().await;
@@ -174,21 +185,44 @@ fn serve_connection<Handler: RequestHandler>(
     handler: Arc<Handler>,
     body_limit: usize,
 ) -> impl Future<Output = ()> + Send + 'static {
+    let (sent, mut received) = mpsc::unbounded_channel();
     let service = service_fn(move |request| {
         let handler = Arc::clone(&handler);
+        let sent = sent.clone();
         async move {
             let access = AccessLog::start(peer_address, &request);
-            let response = handle_request(&handler, request, body_limit).await;
+            let mut response = handle_request(&handler, request, body_limit).await;
             access.finish(response.status());
-            Ok::<_, Infallible>(response)
+            let tasks = take_background_tasks(&mut response);
+            Ok::<_, Infallible>(response.map(|body| ResponseBody::new(body, tasks, sent)))
         }
     });
     let connection = graceful.watch(builder.serve_connection(TokioIo::new(stream), service));
-
-    async move {
+    let serving = async move {
         if let Err(error) = connection.await {
             tracing::debug!(%error, %peer_address, "connection ended with an error");
         }
+    };
+    // one response's tasks run in order, beside those of the others; dropping the set aborts them
+    let running = async move {
+        let mut running = JoinSet::new();
+        loop {
+            tokio::select! {
+                // the channel closes once the connection and the last of its responses are dropped
+                received_tasks = received.recv() => match received_tasks {
+                    Some(tasks) => {
+                        running.spawn(run_catching_panics(tasks));
+                    }
+                    None => break,
+                },
+                Some(_) = running.join_next() => {}
+            }
+        }
+        while running.join_next().await.is_some() {}
+    };
+
+    async move {
+        tokio::join!(serving, running);
     }
 }
 
@@ -202,13 +236,13 @@ async fn handle_request(
     handler: &Arc<impl RequestHandler>,
     request: http::Request<Incoming>,
     body_limit: usize,
-) -> http::Response<Full<Bytes>> {
+) -> Response {
     let (parts, body) = request.into_parts();
     // a declared length is refused before any of the body is read
     if body.size_hint().lower() > body_limit as u64 {
-        return content_too_large().map(Full::new);
+        return content_too_large();
     }
-    let response = match Limited::new(body, body_limit).collect().await {
+    match Limited::new(body, body_limit).collect().await {
         Ok(collected) => {
             let request = http::Request::from_parts(parts, collected.to_bytes());
             call_catching_panics(handler, request).await
@@ -218,8 +252,7 @@ async fn handle_request(
             tracing::debug!(%error, "failed to read the request body");
             status_response(StatusCode::BAD_REQUEST)
         }
-    };
-    response.map(Full::new)
+    }
 }
 
 fn content_too_large() -> Response {

@@ -1,13 +1,13 @@
 use std::error::Error;
 use std::future::{Future, ready};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use bytes::Bytes;
 use http::header::DATE;
 use http::{HeaderMap, HeaderValue, Method, StatusCode};
 use thermite_core::{InProcessServer, Request, RequestHandler, Response, ServerError};
 
-use crate::support::{RunningServer, TestResult, text_response};
+use crate::support::{Events, RunningServer, TestResult, text_response};
 
 // what the wire shows of a response, apart from the date hyper adds
 #[derive(Debug, PartialEq)]
@@ -135,25 +135,6 @@ async fn a_panic_reaches_the_caller_unless_caught() -> TestResult {
         Some(&"handler failed")
     );
     Ok(())
-}
-
-#[derive(Clone, Default)]
-struct Events(Arc<Mutex<Vec<&'static str>>>);
-
-impl Events {
-    fn record(&self, event: &'static str) {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(event);
-    }
-
-    fn recorded(&self) -> Vec<&'static str> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
 }
 
 struct Lifecycle {

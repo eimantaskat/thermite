@@ -2,6 +2,7 @@
 
 mod app;
 mod arity;
+mod background;
 mod dependency;
 mod error;
 mod exception;
@@ -37,8 +38,9 @@ pub use router::Router;
 pub use state::{RequiredState, State};
 pub use test_client::{TestClient, TestRequest, TestRequestError, TestResponse};
 pub use thermite_core::{
-    Arguments, Field, HttpError, Middleware, Next, OpenApiError, Parameter, ParameterLocation,
-    Request, RequestValidationError, Response, ResponseDescription, RouteDescription, RouteError,
-    Schema, SchemaLocation, SchemaProblem, Server, ServerError, Value,
+    Arguments, BackgroundTasks, Field, HttpError, Middleware, Next, OpenApiError, Parameter,
+    ParameterLocation, Request, RequestValidationError, Response, ResponseDescription,
+    RouteDescription, RouteError, Schema, SchemaLocation, SchemaProblem, Server, ServerError,
+    Value,
 };
 pub use thermite_macros::{Model, delete, get, head, options, patch, post, put, trace};

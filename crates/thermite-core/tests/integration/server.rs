@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::future::{Future, pending, ready};
 use std::io;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -12,7 +12,7 @@ use tokio::net::TcpStream;
 use tokio::sync::{Barrier, Notify};
 use tokio::time::timeout;
 
-use crate::support::{RunningServer, TEST_TIMEOUT, TestResult, send_raw, text_response};
+use crate::support::{Events, RunningServer, TEST_TIMEOUT, TestResult, send_raw, text_response};
 
 #[tokio::test]
 async fn returns_the_response_built_by_the_handler() -> TestResult {
@@ -350,25 +350,6 @@ async fn reports_the_port_it_bound_to() -> TestResult {
     assert!(address.ip().is_loopback());
     assert_ne!(address.port(), 0);
     Ok(())
-}
-
-#[derive(Clone, Default)]
-struct Events(Arc<Mutex<Vec<&'static str>>>);
-
-impl Events {
-    fn record(&self, event: &'static str) {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(event);
-    }
-
-    fn recorded(&self) -> Vec<&'static str> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-    }
 }
 
 // answers at once, except on /hang, which never answers

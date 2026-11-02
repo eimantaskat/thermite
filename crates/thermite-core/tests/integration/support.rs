@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -85,4 +85,23 @@ pub fn text_response(status: StatusCode, body: &'static str) -> Response {
     let mut response = Response::new(Bytes::from_static(body.as_bytes()));
     *response.status_mut() = status;
     response
+}
+
+#[derive(Clone, Default)]
+pub struct Events(Arc<Mutex<Vec<&'static str>>>);
+
+impl Events {
+    pub fn record(&self, event: &'static str) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(event);
+    }
+
+    pub fn recorded(&self) -> Vec<&'static str> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
 }

@@ -4,8 +4,9 @@ use bytes::Bytes;
 use http::header::CONTENT_LENGTH;
 use http::{HeaderValue, Method, StatusCode};
 
-use super::panic::call_catching_panics;
+use super::panic::{call_catching_panics, run_catching_panics};
 use super::{DEFAULT_BODY_LIMIT, ServerError, content_too_large};
+use crate::background::{run_in_order, take_background_tasks};
 use crate::handler::{Request, RequestHandler, Response};
 
 // answers as the server does, without a socket, so tests can call a handler directly
@@ -56,6 +57,12 @@ impl<Handler: RequestHandler> InProcessServer<Handler> {
             }
         };
         frame_like_hyper(&mut response, head);
+        // the server runs them after the response is sent, which here is before send returns
+        let tasks = take_background_tasks(&mut response);
+        match self.panics {
+            Panics::Reach => run_in_order(tasks).await,
+            Panics::Answer500 => run_catching_panics(tasks).await,
+        }
         response
     }
 

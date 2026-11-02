@@ -6,7 +6,8 @@ use std::marker::PhantomData;
 
 use http::StatusCode;
 use thermite_core::{
-    Arguments, Request, Response, ResponseDescription, RouteDescription, RouteHandler,
+    Arguments, BackgroundTasks, Request, Response, ResponseDescription, RouteDescription,
+    RouteHandler, attach_background_tasks, response_error,
 };
 pub use with_response::WithResponse;
 
@@ -86,10 +87,19 @@ macro_rules! impl_handler {
                 mut request: Request,
                 arguments: Arguments,
             ) -> impl Future<Output = Response> + Send {
+                let tasks = BackgroundTasks::new();
                 request.extensions_mut().insert(DependencyCache::default());
+                request.extensions_mut().insert(tasks.clone());
                 async move {
                     match <($($extractor,)*) as FromRequest>::from_request(&request, &arguments).await {
-                        Ok(($($extractor,)*)) => self($($extractor),*).await.into_response(),
+                        Ok(($($extractor,)*)) => {
+                            let mut response = self($($extractor),*).await.into_response();
+                            // FastAPI drops the tasks of a handler that raised
+                            if response_error(&response).is_none() {
+                                attach_background_tasks(&mut response, tasks);
+                            }
+                            response
+                        }
                         Err(rejection) => rejection,
                     }
                 }

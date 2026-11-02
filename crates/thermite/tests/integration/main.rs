@@ -1,4 +1,5 @@
 mod app;
+mod background_tasks;
 mod dependencies;
 mod derive;
 mod exceptions;

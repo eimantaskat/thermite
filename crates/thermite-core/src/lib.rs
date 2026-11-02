@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod arguments;
+mod background;
 mod description;
 mod handler;
 mod http_error;
@@ -15,6 +16,7 @@ mod server;
 mod validation;
 
 pub use arguments::Arguments;
+pub use background::{BackgroundTasks, attach_background_tasks};
 pub use description::{Parameter, ParameterLocation, ResponseDescription, RouteDescription};
 pub use handler::{Request, RequestHandler, Response, RouteHandler};
 pub use http_error::HttpError;

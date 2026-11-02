@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::future::poll_fn;
+use std::future::{Future, poll_fn};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::pin::pin;
 use std::sync::Arc;
@@ -8,6 +8,7 @@ use std::task::Poll;
 use http::header::CONTENT_TYPE;
 use http::{HeaderValue, StatusCode};
 
+use crate::background::{Task, run_in_order};
 use crate::handler::{Request, RequestHandler, Response};
 
 // like Starlette's ServerErrorMiddleware; the future is dropped, and state shared with other requests is left as by any panicking task
@@ -15,23 +16,34 @@ pub(super) async fn call_catching_panics(
     handler: &Arc<impl RequestHandler>,
     request: Request,
 ) -> Response {
-    let outcome = match catch_unwind(AssertUnwindSafe(|| handler.call(request))) {
-        Ok(future) => {
-            let mut future = pin!(future);
-            poll_fn(
-                |cx| match catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(cx))) {
-                    Ok(poll) => poll.map(Ok),
-                    Err(payload) => Poll::Ready(Err(payload)),
-                },
-            )
-            .await
-        }
-        Err(payload) => Err(payload),
-    };
-    outcome.unwrap_or_else(|payload| {
-        tracing::error!(panic = message(payload.as_ref()), "a handler panicked");
-        internal_server_error()
-    })
+    catching_panics(|| handler.call(request))
+        .await
+        .unwrap_or_else(|payload| {
+            tracing::error!(panic = message(payload.as_ref()), "a handler panicked");
+            internal_server_error()
+        })
+}
+
+pub(super) async fn run_catching_panics(tasks: Vec<Task>) {
+    if let Err(payload) = catching_panics(|| run_in_order(tasks)).await {
+        tracing::error!(
+            panic = message(payload.as_ref()),
+            "a background task panicked, skipping the tasks after it"
+        );
+    }
+}
+
+async fn catching_panics<Started: Future>(
+    start: impl FnOnce() -> Started,
+) -> Result<Started::Output, Box<dyn Any + Send>> {
+    let mut future = pin!(catch_unwind(AssertUnwindSafe(start))?);
+    poll_fn(
+        |cx| match catch_unwind(AssertUnwindSafe(|| future.as_mut().poll(cx))) {
+            Ok(poll) => poll.map(Ok),
+            Err(payload) => Poll::Ready(Err(payload)),
+        },
+    )
+    .await
 }
 
 fn message(payload: &(dyn Any + Send)) -> &str {
