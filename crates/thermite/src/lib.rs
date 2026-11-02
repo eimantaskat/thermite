@@ -36,3 +36,4 @@ pub use thermite_core::{
     Request, RequestValidationError, Response, RouteDescription, RouteError, Schema, Server,
     ServerError, Value,
 };
+pub use thermite_macros::Model;

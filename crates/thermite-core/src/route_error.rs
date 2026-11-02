@@ -37,6 +37,8 @@ pub enum RouteError {
     DuplicateBody { path: String },
     #[error("body of `{path}` has the field `{name}` more than once in one object")]
     DuplicateField { path: String, name: String },
+    #[error("the default of `{name}` in `{path}` is not a valid value of its schema")]
+    InvalidDefault { path: String, name: String },
     #[error("{method} `{path}` matches the same requests as the route `{existing}`")]
     Conflict {
         method: Method,

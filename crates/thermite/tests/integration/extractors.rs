@@ -4,73 +4,36 @@ use thermite::{App, Cookie, Field, Header, Json, Model, Path, Query, StatusCode,
 
 use crate::support::{RunningServer, TestResult};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Model)]
 struct ItemPath {
     item_id: i64,
 }
 
-impl Model for ItemPath {
-    fn fields() -> Vec<Field> {
-        vec![Field::new("item_id", i64::schema())]
-    }
-}
-
-#[derive(Deserialize)]
+#[derive(Deserialize, Model)]
 struct Paging {
+    #[model(default = 10)]
     limit: i64,
+    #[model(default = Vec::<String>::new())]
     tags: Vec<String>,
     search: Option<String>,
 }
 
-impl Model for Paging {
-    fn fields() -> Vec<Field> {
-        vec![
-            Field::new("limit", i64::schema()).with_default(10),
-            Field::new("tags", Vec::<String>::schema()).with_default(Vec::<String>::new()),
-            Field::new("search", String::schema()).optional(),
-        ]
-    }
-}
-
-#[derive(Deserialize)]
+#[derive(Deserialize, Model)]
 struct Client {
     x_token: String,
+    #[model(default = Vec::<String>::new())]
     x_tag: Vec<String>,
 }
 
-impl Model for Client {
-    fn fields() -> Vec<Field> {
-        vec![
-            Field::new("x_token", String::schema()),
-            Field::new("x_tag", Vec::<String>::schema()).with_default(Vec::<String>::new()),
-        ]
-    }
-}
-
-#[derive(Deserialize)]
+#[derive(Deserialize, Model)]
 struct Session {
     session_id: String,
 }
 
-impl Model for Session {
-    fn fields() -> Vec<Field> {
-        vec![Field::new("session_id", String::schema())]
-    }
-}
-
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Model)]
 struct Item {
     name: String,
     price: f64,
-}
-
-impl Model for Item {
-    fn fields() -> Vec<Field> {
-        vec![
-            Field::new("name", String::schema()),
-            Field::new("price", f64::schema()),
-        ]
-    }
 }
 
 #[derive(Serialize)]

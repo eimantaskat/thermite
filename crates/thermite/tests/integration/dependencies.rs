@@ -7,21 +7,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde::Deserialize;
 use thermite::{
-    App, Arguments, Dependency, Depends, Field, FromRequest, Header, Json, Model, Path, Query,
-    Request, Response, StatusCode, ToSchema,
+    App, Arguments, Dependency, Depends, FromRequest, Header, Json, Model, Path, Query, Request,
+    Response, StatusCode,
 };
 
 use crate::support::{RunningServer, TestResult};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Model)]
 struct Paging {
+    #[model(default = 10)]
     limit: i64,
-}
-
-impl Model for Paging {
-    fn fields() -> Vec<Field> {
-        vec![Field::new("limit", i64::schema()).with_default(10)]
-    }
 }
 
 #[derive(Clone)]
@@ -72,15 +67,9 @@ impl Dependency for Settings {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Model)]
 struct ApiKey {
     x_api_key: String,
-}
-
-impl Model for ApiKey {
-    fn fields() -> Vec<Field> {
-        vec![Field::new("x_api_key", String::schema())]
-    }
 }
 
 #[derive(Clone)]
@@ -204,15 +193,9 @@ async fn runs_a_dependency_once_per_request_however_many_need_it() -> TestResult
     server.stop().await
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Model)]
 struct ItemPath {
     item_id: i64,
-}
-
-impl Model for ItemPath {
-    fn fields() -> Vec<Field> {
-        vec![Field::new("item_id", i64::schema())]
-    }
 }
 
 #[tokio::test]
@@ -240,15 +223,9 @@ async fn validates_what_dependencies_declare_before_any_of_them_runs() -> TestRe
     server.stop().await
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Model)]
 struct Item {
     name: String,
-}
-
-impl Model for Item {
-    fn fields() -> Vec<Field> {
-        vec![Field::new("name", String::schema())]
-    }
 }
 
 #[derive(Clone)]

@@ -5,46 +5,26 @@ use serde_json::json;
 use thermite::http::header::CONTENT_TYPE;
 use thermite::{
     App, Dependency, Depends, Field, Header, Json, Method, Model, ModelMismatch, OpenApiError,
-    Path, Query, Server, ServerError, StatusCode, ToSchema, Value,
+    Path, Query, Server, ServerError, StatusCode, Value,
 };
 
 use crate::support::{RunningServer, TestResult};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Model)]
 struct ItemPath {
     item_id: i64,
 }
 
-impl Model for ItemPath {
-    fn fields() -> Vec<Field> {
-        vec![Field::new("item_id", i64::schema())]
-    }
-}
-
-#[derive(Deserialize)]
+#[derive(Deserialize, Model)]
 struct Paging {
+    #[model(default = 10)]
     limit: i64,
     search: Option<String>,
 }
 
-impl Model for Paging {
-    fn fields() -> Vec<Field> {
-        vec![
-            Field::new("limit", i64::schema()).with_default(10),
-            Field::new("search", String::schema()).optional(),
-        ]
-    }
-}
-
-#[derive(Deserialize)]
+#[derive(Deserialize, Model)]
 struct Client {
     x_token: String,
-}
-
-impl Model for Client {
-    fn fields() -> Vec<Field> {
-        vec![Field::new("x_token", String::schema())]
-    }
 }
 
 #[derive(Clone)]
@@ -61,30 +41,16 @@ impl Dependency for Authorized {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Model)]
 struct Tag {
     label: String,
 }
 
-impl Model for Tag {
-    fn fields() -> Vec<Field> {
-        vec![Field::new("label", String::schema())]
-    }
-}
-
-#[derive(Deserialize)]
+#[derive(Deserialize, Model)]
 struct Item {
     name: String,
+    #[model(default = json!([]))]
     tags: Vec<Tag>,
-}
-
-impl Model for Item {
-    fn fields() -> Vec<Field> {
-        vec![
-            Field::new("name", String::schema()),
-            Field::new("tags", Vec::<Tag>::schema()).with_default(json!([])),
-        ]
-    }
 }
 
 async fn read_item(

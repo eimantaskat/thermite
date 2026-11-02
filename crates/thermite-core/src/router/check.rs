@@ -44,6 +44,16 @@ pub(super) fn check_description(
             name: name.to_owned(),
         });
     }
+    if let Some(name) = inputs
+        .body
+        .as_ref()
+        .and_then(|schema| schema.invalid_default())
+    {
+        return Err(RouteError::InvalidDefault {
+            path,
+            name: name.to_owned(),
+        });
+    }
     Ok(inputs)
 }
 
@@ -117,15 +127,17 @@ fn check_parameter(
             field.schema().is_scalar_or_list_of_scalars()
         }
     };
-    if supported {
-        Ok(())
-    } else {
-        Err(RouteError::UnsupportedParameterType {
+    if !supported {
+        return Err(RouteError::UnsupportedParameterType {
             path,
             location: parameter.location(),
             name,
-        })
+        });
     }
+    if field.invalid_default().is_some() {
+        return Err(RouteError::InvalidDefault { path, name });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -415,5 +427,48 @@ mod tests {
                 name: "id".to_owned()
             })
         );
+    }
+
+    // the core fills a default in without validating it, so serde would be the first to see a wrong one
+    #[test]
+    fn rejects_a_default_that_validation_would_not_return_unchanged() {
+        let parameter = items("/items")
+            .parameter(Parameter::query("limit", Schema::integer()).with_default("ten"));
+        let coercible = items("/items")
+            .parameter(Parameter::query("limit", Schema::integer()).with_default("20"));
+        let nested = items("/items").body(Schema::object([Field::new(
+            "tags",
+            Schema::array(Schema::object([
+                Field::new("label", Schema::string()).with_default(3)
+            ])),
+        )]));
+
+        for (description, name) in [
+            (parameter, "limit"),
+            (coercible, "limit"),
+            (nested, "label"),
+        ] {
+            assert_eq!(
+                check(&description),
+                Err(RouteError::InvalidDefault {
+                    path: "/items".to_owned(),
+                    name: name.to_owned()
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_defaults_of_their_own_schema() {
+        let description = items("/items")
+            .parameter(Parameter::query("limit", Schema::integer()).with_default(20))
+            .parameter(Parameter::query("tag", Schema::array(Schema::string())).with_default(["a"]))
+            .body(Schema::object([Field::new(
+                "tags",
+                Schema::array(Schema::object([Field::new("label", Schema::string())])),
+            )
+            .with_default(serde_json::json!([{"label": "new"}]))]));
+
+        assert_eq!(check(&description), Ok(()));
     }
 }

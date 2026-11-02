@@ -1,0 +1,5 @@
+error: `#[serde(flatten)]` is not supported by `#[derive(Model)]`
+ --> tests/derive_errors/unsupported_serde_attribute.rs:7:13
+  |
+7 |     #[serde(flatten)]
+  |             ^^^^^^^

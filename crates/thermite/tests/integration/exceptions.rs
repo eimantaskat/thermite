@@ -5,21 +5,15 @@ use serde_json::{Value, json};
 use thermite::http::HeaderValue;
 use thermite::http::header::{ALLOW, CONTENT_TYPE};
 use thermite::{
-    App, Error, Field, HttpError, IntoResponse, Json, Model, Next, Query, Request,
-    RequestValidationError, Response, StatusCode, ToSchema,
+    App, Error, HttpError, IntoResponse, Json, Model, Next, Query, Request, RequestValidationError,
+    Response, StatusCode,
 };
 
 use crate::support::{RunningServer, TestResult};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Model)]
 struct Lookup {
     id: String,
-}
-
-impl Model for Lookup {
-    fn fields() -> Vec<Field> {
-        vec![Field::new("id", String::schema())]
-    }
 }
 
 async fn find_item(Query(lookup): Query<Lookup>) -> Result<String, Error> {

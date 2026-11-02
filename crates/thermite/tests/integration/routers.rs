@@ -2,36 +2,19 @@ use std::future::ready;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use thermite::{
-    App, Field, Method, Model, Path, RouteError, Router, Server, ServerError, State, ToSchema,
-};
+use thermite::{App, Method, Model, Path, RouteError, Router, Server, ServerError, State};
 
 use crate::support::{RunningServer, TestResult};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Model)]
 struct ItemPath {
     item_id: i64,
 }
 
-impl Model for ItemPath {
-    fn fields() -> Vec<Field> {
-        vec![Field::new("item_id", i64::schema())]
-    }
-}
-
-#[derive(Deserialize)]
+#[derive(Deserialize, Model)]
 struct UserItemPath {
     user_id: String,
     item_id: i64,
-}
-
-impl Model for UserItemPath {
-    fn fields() -> Vec<Field> {
-        vec![
-            Field::new("user_id", String::schema()),
-            Field::new("item_id", i64::schema()),
-        ]
-    }
 }
 
 async fn read_item(Path(path): Path<ItemPath>) -> String {

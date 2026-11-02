@@ -11,6 +11,7 @@ http.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thermite-core.workspace = true
+thermite-macros.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 tracing.workspace = true
@@ -19,6 +20,7 @@ tracing.workspace = true
 reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt", "signal", "sync", "time"] }
+trybuild.workspace = true
 
 [lints]
 workspace = true

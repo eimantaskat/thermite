@@ -1,0 +1,5 @@
+error: expected `default = ...`
+ --> tests/derive_errors/unknown_model_setting.rs:5:13
+  |
+5 |     #[model(optional)]
+  |             ^^^^^^^^

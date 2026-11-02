@@ -1,0 +1,5 @@
+error: an `Option` field is already optional, so it takes no default
+ --> tests/derive_errors/default_on_an_option.rs:5:23
+  |
+5 |     #[model(default = 20)]
+  |                       ^^

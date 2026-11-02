@@ -2,6 +2,11 @@ use std::any::type_name;
 
 use thermite_core::{Field, Schema};
 
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` has no schema, so it cannot be validated or documented",
+    label = "no schema for this type",
+    note = "derive `Model` on a struct, or implement `ToSchema` for the type"
+)]
 pub trait ToSchema {
     fn schema() -> Schema;
 }

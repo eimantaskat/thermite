@@ -1,5 +1,6 @@
 mod app;
 mod dependencies;
+mod derive;
 mod exceptions;
 mod extractors;
 mod middleware;

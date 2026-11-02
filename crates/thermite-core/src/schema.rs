@@ -5,6 +5,8 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
+use crate::validation::Location;
+
 pub(crate) use json_schema::{Components, JsonSchema, NameConflict, entries, title};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +98,14 @@ impl Schema {
         }
     }
 
+    pub(crate) fn invalid_default(&self) -> Option<&str> {
+        match &self.0 {
+            Kind::Array(items) => items.invalid_default(),
+            Kind::Object { fields, .. } => fields.iter().find_map(Field::invalid_default),
+            _ => None,
+        }
+    }
+
     pub(crate) fn is_array(&self) -> bool {
         matches!(self.0, Kind::Array(_))
     }
@@ -155,6 +165,19 @@ impl Field {
 
     pub(crate) fn is_required(&self) -> bool {
         self.presence == Presence::Required
+    }
+
+    // a default skips validation on its way to serde, so it must already be what validation returns
+    pub(crate) fn invalid_default(&self) -> Option<&str> {
+        if let Presence::Default(default) = &self.presence
+            && !self
+                .schema
+                .validate(default.clone(), &Location::root("default"))
+                .is_ok_and(|validated| validated == *default)
+        {
+            return Some(&self.name);
+        }
+        self.schema.invalid_default()
     }
 
     pub(crate) fn matches_ignoring_name(&self, other: &Field) -> bool {
