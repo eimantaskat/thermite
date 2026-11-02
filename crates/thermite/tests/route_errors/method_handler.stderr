@@ -1,0 +1,5 @@
+error: a route handler is a free function, not a method
+ --> tests/route_errors/method_handler.rs:7:19
+  |
+7 |     async fn list(&self) -> &'static str {
+  |                   ^^^^^

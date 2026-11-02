@@ -1,0 +1,19 @@
+error[E0277]: `fn(i64) -> impl Future<Output = std::string::String> {count}` cannot handle a route
+ --> tests/route_errors/not_a_handler.rs:4:10
+  |
+3 | #[get("/")]
+  | ----------- required by a bound introduced by this call
+4 | async fn count(count: i64) -> String {
+  |          ^^^^^ not a handler
+  |
+  = help: the trait `Handler<_>` is not implemented for fn item `fn(i64) -> impl Future<Output = std::string::String> {count}`
+  = note: a handler is an async fn whose arguments implement `FromRequest` and whose output implements `IntoResponse`
+  = note: a `Json<T>` output also needs `T: ToSchema`, which `#[derive(Model)]` provides
+note: required by a bound in `Route::new`
+ --> src/route.rs
+  |
+  |     pub fn new<Function, Extractors>(
+  |            --- required by a bound in this associated function
+...
+  |         Function: Handler<Extractors>,
+  |                   ^^^^^^^^^^^^^^^^^^^ required by this bound in `Route::new`

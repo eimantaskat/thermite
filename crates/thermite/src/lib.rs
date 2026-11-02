@@ -14,6 +14,7 @@ mod model;
 mod rejection;
 mod resource;
 mod response;
+mod route;
 mod router;
 mod state;
 mod test_client;
@@ -31,6 +32,7 @@ pub use model::{Model, ToSchema};
 pub use rejection::ModelMismatch;
 pub use resource::Resource;
 pub use response::IntoResponse;
+pub use route::Route;
 pub use router::Router;
 pub use state::{RequiredState, State};
 pub use test_client::{TestClient, TestRequest, TestRequestError, TestResponse};
@@ -39,4 +41,4 @@ pub use thermite_core::{
     Request, RequestValidationError, Response, ResponseDescription, RouteDescription, RouteError,
     Schema, SchemaLocation, SchemaProblem, Server, ServerError, Value,
 };
-pub use thermite_macros::Model;
+pub use thermite_macros::{Model, delete, get, head, options, patch, post, put, trace};

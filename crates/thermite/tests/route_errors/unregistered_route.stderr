@@ -1,0 +1,11 @@
+error: function `home` is never used
+ --> tests/route_errors/unregistered_route.rs:6:10
+  |
+6 | async fn home() -> &'static str {
+  |          ^^^^
+  |
+note: the lint level is defined here
+ --> tests/route_errors/unregistered_route.rs:1:9
+  |
+1 | #![deny(dead_code)]
+  |         ^^^^^^^^^

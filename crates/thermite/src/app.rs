@@ -16,7 +16,8 @@ use crate::lifespan::Lifespan;
 use crate::method_routes::method_routes;
 use crate::resource::Resource;
 use crate::response::IntoResponse;
-use crate::router::{PendingRoute, Router};
+use crate::route::Route;
+use crate::router::Router;
 
 #[derive(Debug, Default)]
 pub struct App {
@@ -119,18 +120,21 @@ impl App {
         Function: Handler<Extractors>,
         Extractors: 'static,
     {
-        PendingRoute::new(method, path.into(), handler)
-            .add_to(&mut self.router, &mut self.lifespan)?;
+        Route::new(method, path, handler).add_to(&mut self.router, &mut self.lifespan)?;
         Ok(self)
     }
 
     method_routes!(Result<Self, RouteError>);
 
-    pub fn include_router(mut self, router: Router) -> Result<Self, RouteError> {
-        for route in router.into_routes() {
+    pub fn routes(mut self, routes: impl IntoIterator<Item = Route>) -> Result<Self, RouteError> {
+        for route in routes {
             route.add_to(&mut self.router, &mut self.lifespan)?;
         }
         Ok(self)
+    }
+
+    pub fn include_router(self, router: Router) -> Result<Self, RouteError> {
+        self.routes(router.into_routes())
     }
 }
 

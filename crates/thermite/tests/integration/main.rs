@@ -6,6 +6,7 @@ mod extractors;
 mod middleware;
 mod openapi;
 mod responses;
+mod route_attributes;
 mod routers;
 mod state;
 mod support;
