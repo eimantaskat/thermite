@@ -37,6 +37,7 @@ impl Schema {
                 Some(fields) => return object(fields, value, location, models),
                 None => Ok(Coerced::Unchanged),
             },
+            Kind::Any => Ok(Coerced::Unchanged),
         };
         match coerced {
             Ok(Coerced::Unchanged) => Ok(value),
@@ -213,6 +214,13 @@ mod tests {
 
     fn failed(kind: ErrorKind, location: Value, input: Value) -> Validated {
         Err(vec![ValidationError::at(kind, location, input)])
+    }
+
+    #[test]
+    fn accepts_any_value_unchanged_as_any() {
+        for value in [json!(null), json!("4"), json!([1, "a"]), json!({"a": {}})] {
+            assert_eq!(check(&Schema::any(), value.clone()), Ok(value));
+        }
     }
 
     #[test]

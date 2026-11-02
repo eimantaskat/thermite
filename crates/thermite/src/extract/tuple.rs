@@ -1,7 +1,7 @@
 use thermite_core::{Arguments, Request, Response, RouteDescription};
 
 use crate::arity::for_each_arity;
-use crate::extract::FromRequest;
+use crate::extract::{FromRequest, describe_extractor};
 use crate::response::IntoResponse;
 use crate::state::RequiredState;
 
@@ -11,7 +11,7 @@ macro_rules! impl_from_request_for_tuple {
             type Rejection = Response;
 
             fn describe(description: RouteDescription) -> RouteDescription {
-                $(let description = $extractor::describe(description);)*
+                $(let description = describe_extractor::<$extractor>(description);)*
                 description
             }
 

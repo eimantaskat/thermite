@@ -26,7 +26,8 @@ impl ResponseDescription {
         self
     }
 
-    pub(crate) fn status(&self) -> StatusCode {
+    #[must_use]
+    pub fn status(&self) -> StatusCode {
         self.status
     }
 

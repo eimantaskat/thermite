@@ -69,6 +69,7 @@ impl Schema {
             } => components.model(name, self, fields)?,
             // the model it repeats encloses it, so the components describe that model
             Kind::Reference(name) => reference(name),
+            Kind::Any => JsonSchema::new(),
         })
     }
 }
@@ -182,6 +183,13 @@ mod tests {
             json!({"items": {"items": {"type": "number"}, "type": "array"}, "type": "array"})
         );
         assert_eq!(components, json!({}));
+    }
+
+    #[test]
+    fn writes_any_value_as_an_empty_schema() {
+        let (schema, _) = document(&Schema::array(Schema::any()));
+
+        assert_eq!(schema, json!({"items": {}, "type": "array"}));
     }
 
     #[test]

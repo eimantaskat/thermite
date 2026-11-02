@@ -2,9 +2,17 @@ use std::convert::Infallible;
 
 use http::header::CONTENT_TYPE;
 use http::{HeaderValue, StatusCode};
-use thermite_core::Response;
+use thermite_core::{Response, ResponseDescription, RouteDescription};
+
+pub(crate) const SUCCESSFUL_RESPONSE: &str = "Successful Response";
 
 pub trait IntoResponse {
+    // what the docs list for this type, left empty when its status or body is chosen at runtime
+    #[must_use]
+    fn describe() -> Vec<ResponseDescription> {
+        Vec::new()
+    }
+
     fn into_response(self) -> Response;
 }
 
@@ -22,6 +30,13 @@ impl IntoResponse for Infallible {
 }
 
 impl IntoResponse for () {
+    fn describe() -> Vec<ResponseDescription> {
+        vec![ResponseDescription::new(
+            StatusCode::OK,
+            SUCCESSFUL_RESPONSE,
+        )]
+    }
+
     fn into_response(self) -> Response {
         Response::default()
     }
@@ -49,6 +64,14 @@ impl IntoResponse for String {
 
 // a body that is not a success, such as a Json that failed to serialize, keeps its own status
 impl<Body: IntoResponse> IntoResponse for (StatusCode, Body) {
+    // the status is only known at runtime, so the successes of the body are left undocumented
+    fn describe() -> Vec<ResponseDescription> {
+        Body::describe()
+            .into_iter()
+            .filter(|response| !response.status().is_success())
+            .collect()
+    }
+
     fn into_response(self) -> Response {
         let (status, body) = self;
         let mut response = body.into_response();
@@ -60,12 +83,26 @@ impl<Body: IntoResponse> IntoResponse for (StatusCode, Body) {
 }
 
 impl<Success: IntoResponse, Failure: IntoResponse> IntoResponse for Result<Success, Failure> {
+    fn describe() -> Vec<ResponseDescription> {
+        let mut responses = Success::describe();
+        responses.extend(Failure::describe());
+        responses
+    }
+
     fn into_response(self) -> Response {
         match self {
             Ok(success) => success.into_response(),
             Err(failure) => failure.into_response(),
         }
     }
+}
+
+pub(crate) fn describe_responses<Output: IntoResponse>(
+    description: RouteDescription,
+) -> RouteDescription {
+    Output::describe()
+        .into_iter()
+        .fold(description, RouteDescription::response)
 }
 
 fn plain_text(response: Response) -> Response {
@@ -86,7 +123,67 @@ pub(crate) fn internal_server_error() -> Response {
 
 #[cfg(test)]
 mod tests {
+    use thermite_core::Schema;
+
     use super::*;
+    use crate::json::Json;
+
+    struct NotFound;
+
+    impl IntoResponse for NotFound {
+        fn describe() -> Vec<ResponseDescription> {
+            vec![not_found()]
+        }
+
+        fn into_response(self) -> Response {
+            StatusCode::NOT_FOUND.into_response()
+        }
+    }
+
+    fn integer_success() -> ResponseDescription {
+        ResponseDescription::new(StatusCode::OK, SUCCESSFUL_RESPONSE).with_schema(Schema::integer())
+    }
+
+    fn not_found() -> ResponseDescription {
+        ResponseDescription::new(StatusCode::NOT_FOUND, "Item not found")
+    }
+
+    #[test]
+    fn a_body_decided_at_runtime_documents_nothing() {
+        assert_eq!(Response::describe(), []);
+        assert_eq!(String::describe(), []);
+        assert_eq!(<&str>::describe(), []);
+        assert_eq!(StatusCode::describe(), []);
+        assert_eq!(Infallible::describe(), []);
+    }
+
+    #[test]
+    fn documents_unit_as_a_success_without_a_body_and_json_with_its_schema() {
+        assert_eq!(
+            <()>::describe(),
+            [ResponseDescription::new(
+                StatusCode::OK,
+                SUCCESSFUL_RESPONSE
+            )]
+        );
+        assert_eq!(Json::<i64>::describe(), [integer_success()]);
+    }
+
+    #[test]
+    fn a_result_documents_both_sides_in_order() {
+        assert_eq!(
+            Result::<Json<i64>, NotFound>::describe(),
+            [integer_success(), not_found()]
+        );
+    }
+
+    #[test]
+    fn a_status_code_in_a_pair_leaves_only_the_failures_of_the_body_documented() {
+        assert_eq!(
+            <(StatusCode, Result<Json<i64>, NotFound>)>::describe(),
+            [not_found()]
+        );
+    }
 
     fn parts(response: &Response) -> (StatusCode, Option<&str>, &[u8]) {
         let content_type = response

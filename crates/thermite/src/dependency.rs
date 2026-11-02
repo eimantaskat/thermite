@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use thermite_core::{Arguments, Request, Response, RouteDescription};
 
-use crate::extract::FromRequest;
-use crate::response::IntoResponse;
+use crate::extract::{FromRequest, describe_extractor};
+use crate::response::{IntoResponse, describe_responses};
 use crate::state::RequiredState;
 
 pub trait Dependency: Clone + Send + 'static {
@@ -23,7 +23,9 @@ impl<T: Dependency> FromRequest for Depends<T> {
     type Rejection = Response;
 
     fn describe(description: RouteDescription) -> RouteDescription {
-        description.dependency(T::Needs::describe)
+        description.dependency(|dependency| {
+            describe_responses::<T::Rejection>(describe_extractor::<T::Needs>(dependency))
+        })
     }
 
     fn require_state(required: &mut RequiredState) {

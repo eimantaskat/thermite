@@ -7,10 +7,16 @@ use thermite_core::{Arguments, Request, Response, RouteDescription, RouteHandler
 use crate::arity::for_each_arity;
 use crate::dependency::DependencyCache;
 use crate::extract::FromRequest;
-use crate::response::IntoResponse;
+use crate::response::{IntoResponse, describe_responses};
 use crate::state::RequiredState;
 
 // `Extractors` is the tuple of argument types, so one function type can only match one impl
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot handle a route",
+    label = "not a handler",
+    note = "a handler is an async fn whose arguments implement `FromRequest` and whose output implements `IntoResponse`",
+    note = "a `Json<T>` output also needs `T: ToSchema`, which `#[derive(Model)]` provides"
+)]
 pub trait Handler<Extractors>: Send + Sync + 'static {
     fn describe(description: RouteDescription) -> RouteDescription;
 
@@ -28,7 +34,9 @@ macro_rules! impl_handler {
             Output: Future<Output: IntoResponse> + Send,
             $($extractor: FromRequest,)*
         {
+            // what the handler answers comes first, then what each extractor rejects with
             fn describe(description: RouteDescription) -> RouteDescription {
+                let description = describe_responses::<Output::Output>(description);
                 <($($extractor,)*) as FromRequest>::describe(description)
             }
 
@@ -113,9 +121,11 @@ mod tests {
 
     use http::header::AUTHORIZATION;
     use http::{Method, StatusCode};
-    use thermite_core::{Parameter, Schema};
+    use thermite_core::{Parameter, ResponseDescription, Schema};
 
     use super::*;
+    use crate::json::Json;
+    use crate::response::SUCCESSFUL_RESPONSE;
 
     fn status(code: StatusCode) -> Response {
         let mut response = Response::default();
@@ -126,9 +136,17 @@ mod tests {
     struct Unauthorized;
 
     impl IntoResponse for Unauthorized {
+        fn describe() -> Vec<ResponseDescription> {
+            vec![not_authenticated()]
+        }
+
         fn into_response(self) -> Response {
             StatusCode::UNAUTHORIZED.into_response()
         }
+    }
+
+    fn not_authenticated() -> ResponseDescription {
+        ResponseDescription::new(StatusCode::UNAUTHORIZED, "Not authenticated")
     }
 
     struct Token;
@@ -214,6 +232,22 @@ mod tests {
             RouteDescription::new(Method::GET, "/items")
                 .parameter(Parameter::query("offset", Schema::integer()).with_default(0))
                 .parameter(Parameter::query("limit", Schema::integer()))
+                .response(not_authenticated())
+        );
+    }
+
+    #[test]
+    fn describes_what_the_handler_answers_before_what_its_extractors_reject_with() {
+        let description = describe(&|_: Token| async { Json(1_i64) });
+
+        assert_eq!(
+            description,
+            RouteDescription::new(Method::GET, "/items")
+                .response(
+                    ResponseDescription::new(StatusCode::OK, SUCCESSFUL_RESPONSE)
+                        .with_schema(Schema::integer())
+                )
+                .response(not_authenticated())
         );
     }
 

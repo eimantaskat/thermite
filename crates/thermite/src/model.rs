@@ -1,7 +1,7 @@
 use std::any::type_name;
 use std::cell::RefCell;
 
-use thermite_core::{Field, Schema};
+use thermite_core::{Field, Schema, Value};
 
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no schema, so it cannot be validated or documented",
@@ -108,6 +108,12 @@ impl ToSchema for bool {
     }
 }
 
+impl ToSchema for Value {
+    fn schema() -> Schema {
+        Schema::any()
+    }
+}
+
 impl<T: ToSchema> ToSchema for Vec<T> {
     fn schema() -> Schema {
         Schema::array(T::schema())
@@ -138,6 +144,7 @@ mod tests {
         assert_eq!(i64::schema(), Schema::integer());
         assert_eq!(f64::schema(), Schema::number());
         assert_eq!(bool::schema(), Schema::boolean());
+        assert_eq!(Value::schema(), Schema::any());
         assert_eq!(
             Vec::<Vec<bool>>::schema(),
             Schema::array(Schema::array(Schema::boolean()))

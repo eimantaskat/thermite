@@ -36,7 +36,7 @@ struct Item {
     price: f64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Model)]
 struct Updated {
     item_id: i64,
     limit: i64,

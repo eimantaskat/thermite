@@ -88,7 +88,7 @@ fn describe<'router>(
 // the responses of one status, in the order they were first declared
 struct Documented<'router> {
     status: StatusCode,
-    description: &'router str,
+    descriptions: Vec<&'router str>,
     schemas: Vec<Value>,
 }
 
@@ -105,7 +105,7 @@ fn describe_responses<'router>(
     {
         documented.push(Documented {
             status: StatusCode::OK,
-            description: "Successful Response",
+            descriptions: vec!["Successful Response"],
             schemas: vec![json!({})],
         });
     }
@@ -141,7 +141,7 @@ fn describe_responses<'router>(
         .into())
 }
 
-// unlike FastAPI, where a declared 422 replaces its own, every body a status can carry is listed
+// unlike FastAPI, where a declared 422 replaces its own, every description and body of a status is listed
 fn merge<'router>(
     documented: &mut Vec<Documented<'router>>,
     status: StatusCode,
@@ -152,22 +152,25 @@ fn merge<'router>(
     let index = known.unwrap_or_else(|| {
         documented.push(Documented {
             status,
-            description,
+            descriptions: Vec::new(),
             schemas: Vec::new(),
         });
         documented.len() - 1
     });
-    let schemas = &mut documented[index].schemas;
+    let known = &mut documented[index];
+    if !known.descriptions.contains(&description) {
+        known.descriptions.push(description);
+    }
     if let Some(schema) = schema
-        && !schemas.contains(&schema)
+        && !known.schemas.contains(&schema)
     {
-        schemas.push(schema);
+        known.schemas.push(schema);
     }
 }
 
 impl Documented<'_> {
     fn into_json(mut self) -> Value {
-        let mut response = entries([("description", self.description.into())]);
+        let mut response = entries([("description", self.descriptions.join(" or ").into())]);
         let schema = match self.schemas.len() {
             0 => None,
             1 => self.schemas.pop(),
@@ -405,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn lists_each_body_a_status_can_carry_once_under_its_first_description() {
+    fn lists_each_description_and_body_a_status_can_carry_once() {
         let responses = responses(
             items()
                 .body(Schema::string())
@@ -422,7 +425,7 @@ mod tests {
                         .with_schema(Schema::integer()),
                 )
                 .response(
-                    ResponseDescription::new(StatusCode::BAD_REQUEST, "Bad query")
+                    ResponseDescription::new(StatusCode::BAD_REQUEST, "Bad header")
                         .with_schema(Schema::string()),
                 ),
         );
@@ -431,7 +434,7 @@ mod tests {
         assert_eq!(
             responses["422"],
             json!({
-                "description": "Unprocessable",
+                "description": "Unprocessable or Validation Error",
                 "content": json_content(json!({
                     "anyOf": [{ "type": "string" }, reference(HTTP_VALIDATION_ERROR)]
                 }))
@@ -440,7 +443,7 @@ mod tests {
         assert_eq!(
             responses["400"],
             json!({
-                "description": "Bad header",
+                "description": "Bad header or Bad cookie",
                 "content": json_content(json!({
                     "anyOf": [{ "type": "string" }, { "type": "integer" }]
                 }))

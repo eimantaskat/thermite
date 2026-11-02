@@ -1,14 +1,17 @@
 use std::any::type_name;
 use std::future::{Future, ready};
 
+use http::StatusCode;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use thermite_core::{Arguments, Request, Response, RouteDescription, Value};
+use thermite_core::{Arguments, Request, Response, ResponseDescription, RouteDescription, Value};
 
 use crate::extract::FromRequest;
 use crate::model::ToSchema;
 use crate::rejection::ModelMismatch;
-use crate::response::{IntoResponse, internal_server_error, with_content_type};
+use crate::response::{
+    IntoResponse, SUCCESSFUL_RESPONSE, internal_server_error, with_content_type,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Json<T>(pub T);
@@ -34,7 +37,11 @@ impl<T: ToSchema + DeserializeOwned + Send> FromRequest for Json<T> {
     }
 }
 
-impl<T: Serialize> IntoResponse for Json<T> {
+impl<T: Serialize + ToSchema> IntoResponse for Json<T> {
+    fn describe() -> Vec<ResponseDescription> {
+        vec![ResponseDescription::new(StatusCode::OK, SUCCESSFUL_RESPONSE).with_schema(T::schema())]
+    }
+
     fn into_response(self) -> Response {
         match serde_json::to_vec(&self.0) {
             Ok(body) => with_content_type(Response::new(body.into()), "application/json"),

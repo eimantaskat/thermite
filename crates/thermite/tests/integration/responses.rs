@@ -1,16 +1,22 @@
 use serde::ser::Error as _;
 use serde::{Serialize, Serializer};
 use thermite::http::header::CONTENT_TYPE;
-use thermite::{App, Json, StatusCode};
+use thermite::{App, Json, Model, Schema, StatusCode, ToSchema};
 
 use crate::support::{RunningServer, TestResult};
 
-#[derive(Serialize)]
+#[derive(Serialize, Model)]
 struct Created {
     id: i64,
 }
 
 struct Unserializable;
+
+impl ToSchema for Unserializable {
+    fn schema() -> Schema {
+        Schema::any()
+    }
+}
 
 impl Serialize for Unserializable {
     fn serialize<S: Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {

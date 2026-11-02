@@ -26,6 +26,8 @@ enum Kind {
     },
     // a model repeated inside itself, standing for the nearest enclosing model of that name
     Reference(String),
+    // any JSON value, like pydantic's Any
+    Any,
 }
 
 impl Schema {
@@ -73,6 +75,11 @@ impl Schema {
     #[must_use]
     pub fn reference(name: impl Into<String>) -> Self {
         Self(Kind::Reference(name.into()))
+    }
+
+    #[must_use]
+    pub fn any() -> Self {
+        Self(Kind::Any)
     }
 
     pub(crate) fn is_scalar(&self) -> bool {

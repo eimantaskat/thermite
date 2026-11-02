@@ -1,11 +1,12 @@
 use std::future::{Future, ready};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thermite::http::header::CONTENT_TYPE;
 use thermite::{
-    App, Dependency, Depends, Field, Header, Json, Method, Model, ModelMismatch, OpenApiError,
-    Path, Query, Server, ServerError, StatusCode, Value,
+    App, Dependency, Depends, Field, Header, IntoResponse, Json, Method, Model, ModelMismatch,
+    OpenApiError, Path, Query, Response, ResponseDescription, Server, ServerError, StatusCode,
+    Value,
 };
 
 use crate::support::{RunningServer, TestResult};
@@ -41,7 +42,7 @@ impl Dependency for Authorized {
     }
 }
 
-#[derive(Deserialize, Model)]
+#[derive(Serialize, Deserialize, Model)]
 struct Tag {
     label: String,
 }
@@ -217,7 +218,7 @@ async fn documents_the_routes_in_registration_order_as_fastapi_does() -> TestRes
                             }
                         ],
                         "responses": {
-                            "200": successful_response(),
+                            "200": {"description": "Successful Response"},
                             "422": validation_error_response()
                         }
                     }
@@ -248,6 +249,111 @@ async fn documents_the_routes_in_registration_order_as_fastapi_does() -> TestRes
                 }
             },
             "components": {"schemas": expected_components}
+        })
+    );
+    Ok(())
+}
+
+struct NotOwner;
+
+impl IntoResponse for NotOwner {
+    fn describe() -> Vec<ResponseDescription> {
+        vec![ResponseDescription::new(
+            StatusCode::FORBIDDEN,
+            "Not the owner",
+        )]
+    }
+
+    fn into_response(self) -> Response {
+        StatusCode::FORBIDDEN.into_response()
+    }
+}
+
+#[derive(Clone)]
+struct Owner;
+
+impl Dependency for Owner {
+    type Needs = Header<Client>;
+    type Rejection = NotOwner;
+
+    fn resolve(
+        Header(client): Header<Client>,
+    ) -> impl Future<Output = Result<Self, NotOwner>> + Send {
+        ready(if client.x_token == "owner" {
+            Ok(Self)
+        } else {
+            Err(NotOwner)
+        })
+    }
+}
+
+struct TagNotFound;
+
+impl IntoResponse for TagNotFound {
+    fn describe() -> Vec<ResponseDescription> {
+        vec![ResponseDescription::new(
+            StatusCode::NOT_FOUND,
+            "Tag not found",
+        )]
+    }
+
+    fn into_response(self) -> Response {
+        StatusCode::NOT_FOUND.into_response()
+    }
+}
+
+async fn read_tag(_: Depends<Owner>, Path(path): Path<ItemPath>) -> Result<Json<Tag>, TagNotFound> {
+    if path.item_id == 1 {
+        Ok(Json(Tag {
+            label: "hot".to_owned(),
+        }))
+    } else {
+        Err(TagNotFound)
+    }
+}
+
+#[tokio::test]
+async fn documents_what_the_types_of_a_route_answer() -> TestResult {
+    let server = RunningServer::start(App::new().get("/tags/{item_id}", read_tag)?).await?;
+    let client = reqwest::Client::new();
+    let mut statuses = Vec::new();
+    for (path, token) in [
+        ("/tags/1", "owner"),
+        ("/tags/2", "owner"),
+        ("/tags/1", "guest"),
+    ] {
+        let response = client
+            .get(server.url(path))
+            .header("x-token", token)
+            .send()
+            .await?;
+        statuses.push(response.status());
+    }
+
+    let document = document(&server).await?;
+    server.stop().await?;
+
+    let responses = &document["paths"]["/tags/{item_id}"]["get"]["responses"];
+    let order: Vec<&String> = responses
+        .as_object()
+        .ok_or("no responses")?
+        .keys()
+        .collect();
+    assert_eq!(
+        statuses,
+        [StatusCode::OK, StatusCode::NOT_FOUND, StatusCode::FORBIDDEN]
+    );
+    assert_eq!(order, ["200", "404", "403", "422"]);
+    assert_eq!(
+        responses,
+        &json!({
+            "200": {
+                "description": "Successful Response",
+                "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Tag"}}}
+            },
+            "404": {"description": "Tag not found"},
+            "403": {"description": "Not the owner"},
+            "422": validation_error_response()
         })
     );
     Ok(())

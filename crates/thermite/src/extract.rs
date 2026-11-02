@@ -5,7 +5,7 @@ use std::future::Future;
 
 use thermite_core::{Arguments, Request, RouteDescription};
 
-use crate::response::IntoResponse;
+use crate::response::{IntoResponse, describe_responses};
 use crate::state::RequiredState;
 
 pub use parameters::{Cookie, Header, Path, Query};
@@ -26,4 +26,11 @@ pub trait FromRequest: Sized + Send {
         request: &Request,
         arguments: &Arguments,
     ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send;
+}
+
+// what an extractor rejects with is a response of the route too
+pub(crate) fn describe_extractor<Extractor: FromRequest>(
+    description: RouteDescription,
+) -> RouteDescription {
+    describe_responses::<Extractor::Rejection>(Extractor::describe(description))
 }
