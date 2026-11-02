@@ -1,8 +1,10 @@
 use std::collections::HashSet;
 
 use super::path::PathPattern;
-use crate::description::{Body, Declarations, Parameter, ParameterLocation, RouteDescription};
-use crate::route_error::RouteError;
+use crate::description::{
+    Body, Declarations, Parameter, ParameterLocation, ResponseDescription, RouteDescription,
+};
+use crate::route_error::{RouteError, SchemaLocation};
 use crate::schema::Schema;
 
 // what a route reads from each request, in the order FastAPI reports its errors
@@ -17,10 +19,11 @@ pub(super) struct Inputs {
 pub(super) fn check_description(
     description: RouteDescription,
     pattern: &PathPattern,
-) -> Result<Inputs, RouteError> {
+) -> Result<(Inputs, Vec<ResponseDescription>), RouteError> {
     let path = description.path().to_owned();
+    let (declarations, responses) = description.into_parts();
     let mut inputs = Inputs::default();
-    flatten(description.into_declarations(), &path, &mut inputs)?;
+    flatten(declarations, &path, &mut inputs)?;
     for parameter in &inputs.parameters {
         check_parameter(parameter, pattern, &path)?;
     }
@@ -34,48 +37,49 @@ pub(super) fn check_description(
             name: name.to_owned(),
         });
     }
-    if let Some(name) = inputs
-        .body
-        .as_ref()
-        .and_then(|schema| schema.duplicate_field())
-    {
+    if let Some(body) = &inputs.body {
+        check_schema(body, SchemaLocation::Body, &path)?;
+    }
+    for response in &responses {
+        if let Some(schema) = response.schema() {
+            check_schema(schema, SchemaLocation::Response(response.status()), &path)?;
+        }
+    }
+    Ok((inputs, responses))
+}
+
+// responses are never validated, but a wrong schema would still describe them wrongly
+fn check_schema(schema: &Schema, location: SchemaLocation, path: &str) -> Result<(), RouteError> {
+    if let Some(name) = schema.duplicate_field() {
         return Err(RouteError::DuplicateField {
-            path,
+            path: path.to_owned(),
+            location,
             name: name.to_owned(),
         });
     }
-    if let Some(name) = inputs
-        .body
-        .as_ref()
-        .and_then(|schema| schema.conflicting_model_name())
-    {
+    if let Some(name) = schema.conflicting_model_name() {
         return Err(RouteError::ModelNameConflict {
-            path,
+            path: path.to_owned(),
+            location,
             name: name.to_owned(),
         });
     }
     // before the defaults, which an unresolved reference would let through unchecked
-    if let Some(name) = inputs
-        .body
-        .as_ref()
-        .and_then(|schema| schema.unresolved_reference())
-    {
+    if let Some(name) = schema.unresolved_reference() {
         return Err(RouteError::UnresolvedReference {
-            path,
+            path: path.to_owned(),
+            location,
             name: name.to_owned(),
         });
     }
-    if let Some(name) = inputs
-        .body
-        .as_ref()
-        .and_then(|schema| schema.invalid_default())
-    {
+    if let Some(name) = schema.invalid_default() {
         return Err(RouteError::InvalidDefault {
-            path,
+            path: path.to_owned(),
+            location,
             name: name.to_owned(),
         });
     }
-    Ok(inputs)
+    Ok(())
 }
 
 // like FastAPI, a group's dependencies come before its own values, depth first
@@ -156,7 +160,11 @@ fn check_parameter(
         });
     }
     if field.invalid_default().is_some() {
-        return Err(RouteError::InvalidDefault { path, name });
+        return Err(RouteError::InvalidDefault {
+            path,
+            location: SchemaLocation::Parameter(parameter.location()),
+            name,
+        });
     }
     Ok(())
 }
@@ -164,7 +172,7 @@ fn check_parameter(
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use http::Method;
+    use http::{Method, StatusCode};
 
     use super::*;
     use crate::schema::{Field, Schema};
@@ -174,6 +182,7 @@ mod tests {
             description.clone(),
             &PathPattern::parse(description.path()).unwrap(),
         )
+        .map(|(inputs, _)| inputs)
     }
 
     fn check(description: &RouteDescription) -> Result<(), RouteError> {
@@ -450,6 +459,7 @@ mod tests {
             check(&description),
             Err(RouteError::DuplicateField {
                 path: "/items".to_owned(),
+                location: SchemaLocation::Body,
                 name: "id".to_owned()
             })
         );
@@ -468,16 +478,22 @@ mod tests {
                 Field::new("label", Schema::string()).with_default(3)
             ])),
         )]));
+        let query = SchemaLocation::Parameter(ParameterLocation::Query);
 
-        for (description, name) in [
-            (parameter, "limit"),
-            (coercible, "limit"),
-            (nested, "label"),
+        assert_eq!(
+            check(&parameter).unwrap_err().to_string(),
+            "query parameter of `/items` has a default for `limit` that is not a valid value of its schema"
+        );
+        for (description, location, name) in [
+            (parameter, query, "limit"),
+            (coercible, query, "limit"),
+            (nested, SchemaLocation::Body, "label"),
         ] {
             assert_eq!(
                 check(&description),
                 Err(RouteError::InvalidDefault {
                     path: "/items".to_owned(),
+                    location,
                     name: name.to_owned()
                 })
             );
@@ -526,6 +542,7 @@ mod tests {
                 check(&description),
                 Err(RouteError::UnresolvedReference {
                     path: "/items".to_owned(),
+                    location: SchemaLocation::Body,
                     name: "Node".to_owned()
                 })
             );
@@ -544,6 +561,7 @@ mod tests {
             check(&invalid),
             Err(RouteError::InvalidDefault {
                 path: "/items".to_owned(),
+                location: SchemaLocation::Body,
                 name: "children".to_owned()
             })
         );
@@ -566,9 +584,57 @@ mod tests {
             check(&conflicting),
             Err(RouteError::ModelNameConflict {
                 path: "/items".to_owned(),
+                location: SchemaLocation::Body,
                 name: "Tag".to_owned()
             })
         );
         assert_eq!(check(&repeated), Ok(()));
+    }
+
+    #[test]
+    fn checks_the_schema_of_each_response() {
+        let twice = Schema::object([
+            Field::new("id", Schema::integer()),
+            Field::new("id", Schema::integer()),
+        ]);
+        let duplicate = items("/items").response(
+            ResponseDescription::new(StatusCode::NOT_FOUND, "Missing").with_schema(twice),
+        );
+        let unresolved = items("/items").response(
+            ResponseDescription::new(StatusCode::OK, "A node")
+                .with_schema(Schema::reference("Node")),
+        );
+        let wrong_default = items("/items").response(
+            ResponseDescription::new(StatusCode::CREATED, "Created").with_schema(Schema::object([
+                Field::new("label", Schema::string()).with_default(3),
+            ])),
+        );
+
+        let duplicate = check(&duplicate).unwrap_err();
+
+        assert_eq!(
+            duplicate,
+            RouteError::DuplicateField {
+                path: "/items".to_owned(),
+                location: SchemaLocation::Response(StatusCode::NOT_FOUND),
+                name: "id".to_owned()
+            }
+        );
+        assert_eq!(
+            duplicate.to_string(),
+            "response 404 of `/items` has the field `id` more than once in one object"
+        );
+        assert_eq!(
+            check(&unresolved),
+            Err(RouteError::UnresolvedReference {
+                path: "/items".to_owned(),
+                location: SchemaLocation::Response(StatusCode::OK),
+                name: "Node".to_owned()
+            })
+        );
+        assert_eq!(
+            check(&wrong_default).unwrap_err().to_string(),
+            "response 201 of `/items` has a default for `label` that is not a valid value of its schema"
+        );
     }
 }

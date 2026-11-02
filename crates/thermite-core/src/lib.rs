@@ -15,13 +15,13 @@ mod server;
 mod validation;
 
 pub use arguments::Arguments;
-pub use description::{Parameter, ParameterLocation, RouteDescription};
+pub use description::{Parameter, ParameterLocation, ResponseDescription, RouteDescription};
 pub use handler::{Request, RequestHandler, Response, RouteHandler};
 pub use http_error::HttpError;
 pub use middleware::{Middleware, MiddlewareStack, Next, Pipeline};
 pub use openapi::{Docs, OpenApi, OpenApiError};
 pub use response::{attach_error, response_error};
-pub use route_error::RouteError;
+pub use route_error::{RouteError, SchemaLocation};
 pub use router::Router;
 pub use schema::{Field, Schema};
 pub use serde_json::Value;

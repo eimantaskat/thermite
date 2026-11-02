@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
-use thermite::{App, Field, Json, Model, Query, RouteError, Schema, StatusCode, ToSchema};
+use thermite::{
+    App, Field, Json, Model, ParameterLocation, Query, RouteError, Schema, SchemaLocation,
+    StatusCode, ToSchema,
+};
 
 use crate::support::{RunningServer, TestResult};
 
@@ -118,6 +121,7 @@ fn a_default_that_does_not_fit_its_type_fails_when_the_route_is_registered() {
         registered.err(),
         Some(RouteError::InvalidDefault {
             path: "/items".to_owned(),
+            location: SchemaLocation::Parameter(ParameterLocation::Query),
             name: "limit".to_owned()
         })
     );
@@ -253,6 +257,7 @@ fn two_models_of_one_name_in_a_body_fail_when_the_route_is_registered() {
         registered.err(),
         Some(RouteError::ModelNameConflict {
             path: "/items".to_owned(),
+            location: SchemaLocation::Body,
             name: "Item".to_owned()
         })
     );

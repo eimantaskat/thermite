@@ -33,7 +33,7 @@ pub use router::Router;
 pub use state::{RequiredState, State};
 pub use thermite_core::{
     Arguments, Field, HttpError, Middleware, Next, OpenApiError, Parameter, ParameterLocation,
-    Request, RequestValidationError, Response, RouteDescription, RouteError, Schema, Server,
-    ServerError, Value,
+    Request, RequestValidationError, Response, ResponseDescription, RouteDescription, RouteError,
+    Schema, SchemaLocation, Server, ServerError, Value,
 };
 pub use thermite_macros::Model;

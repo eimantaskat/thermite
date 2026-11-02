@@ -1,10 +1,11 @@
 use std::error::Error;
 
 use bytes::Bytes;
-use http::Method;
+use http::{Method, StatusCode};
 use serde_json::{Value, json};
 use thermite_core::{
-    Arguments, Docs, Field, OpenApi, Parameter, Request, Response, RouteDescription, Router, Schema,
+    Arguments, Docs, Field, OpenApi, Parameter, Request, Response, ResponseDescription,
+    RouteDescription, Router, Schema,
 };
 
 use crate::support::one_route;
@@ -23,6 +24,15 @@ fn router() -> Result<Router, Box<dyn Error>> {
             .body(Schema::model(
                 "Item",
                 [Field::new("name", Schema::string())],
+            ))
+            .response(
+                ResponseDescription::new(StatusCode::OK, "The replaced item").with_schema(
+                    Schema::model("Item", [Field::new("name", Schema::string())]),
+                ),
+            )
+            .response(ResponseDescription::new(
+                StatusCode::NOT_FOUND,
+                "Item not found",
             )),
         |_: Request, _: Arguments| async { Response::new(Bytes::new()) },
     )?)
@@ -63,6 +73,24 @@ fn documents_a_route_description_built_by_hand() -> Result<(), Box<dyn Error>> {
         "replace_item_items__id__put"
     );
     assert_eq!(document["components"]["schemas"]["Item"]["title"], "Item");
+    assert_eq!(
+        operation["responses"],
+        json!({
+            "200": {
+                "description": "The replaced item",
+                "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Item" } } }
+            },
+            "404": { "description": "Item not found" },
+            "422": {
+                "description": "Validation Error",
+                "content": {
+                    "application/json": {
+                        "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+                    }
+                }
+            }
+        })
+    );
     assert!(docs.respond(&get("/items/1")?).is_none());
     Ok(())
 }

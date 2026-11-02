@@ -1,9 +1,12 @@
+mod response;
+
 use std::fmt;
 
 use http::{HeaderName, Method};
 use serde_json::Value;
 
 use crate::schema::{Field, Schema};
+pub use response::ResponseDescription;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteDescription {
@@ -14,6 +17,7 @@ pub struct RouteDescription {
     // kept so that registering the route can report it, like a second body
     invalid_prefix: Option<String>,
     declarations: Declarations,
+    responses: Vec<ResponseDescription>,
 }
 
 // what one handler or dependency declares, with what its dependencies declare nested inside
@@ -43,6 +47,7 @@ impl RouteDescription {
             tags: Vec::new(),
             invalid_prefix: None,
             declarations: Declarations::default(),
+            responses: Vec::new(),
         }
     }
 
@@ -86,11 +91,18 @@ impl RouteDescription {
         self
     }
 
-    // `describe` declares into an empty description, which is kept as a group of its own
+    #[must_use]
+    pub fn response(mut self, response: ResponseDescription) -> Self {
+        self.responses.push(response);
+        self
+    }
+
+    // `describe` declares into an empty description, kept as a group of its own; its responses are the route's
     #[must_use]
     pub fn dependency(mut self, describe: impl FnOnce(Self) -> Self) -> Self {
         let dependency = describe(Self::new(self.method.clone(), self.path.clone()));
         self.declarations.dependencies.push(dependency.declarations);
+        self.responses.extend(dependency.responses);
         self
     }
 
@@ -116,8 +128,8 @@ impl RouteDescription {
         self.invalid_prefix.as_deref()
     }
 
-    pub(crate) fn into_declarations(self) -> Declarations {
-        self.declarations
+    pub(crate) fn into_parts(self) -> (Declarations, Vec<ResponseDescription>) {
+        (self.declarations, self.responses)
     }
 }
 

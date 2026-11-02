@@ -1,4 +1,6 @@
-use http::Method;
+use std::fmt;
+
+use http::{Method, StatusCode};
 
 use crate::description::ParameterLocation;
 
@@ -35,20 +37,56 @@ pub enum RouteError {
     InvalidHeaderName { path: String, name: String },
     #[error("`{path}` declares more than one body")]
     DuplicateBody { path: String },
-    #[error("body of `{path}` has the field `{name}` more than once in one object")]
-    DuplicateField { path: String, name: String },
-    #[error("the default of `{name}` in `{path}` is not a valid value of its schema")]
-    InvalidDefault { path: String, name: String },
-    #[error("body of `{path}` refers to the model `{name}` outside any model of that name")]
-    UnresolvedReference { path: String, name: String },
-    #[error("body of `{path}` uses two different models named `{name}`")]
-    ModelNameConflict { path: String, name: String },
+    #[error("{location} of `{path}` has the field `{name}` more than once in one object")]
+    DuplicateField {
+        path: String,
+        location: SchemaLocation,
+        name: String,
+    },
+    #[error(
+        "{location} of `{path}` has a default for `{name}` that is not a valid value of its schema"
+    )]
+    InvalidDefault {
+        path: String,
+        location: SchemaLocation,
+        name: String,
+    },
+    #[error("{location} of `{path}` refers to the model `{name}` outside any model of that name")]
+    UnresolvedReference {
+        path: String,
+        location: SchemaLocation,
+        name: String,
+    },
+    #[error("{location} of `{path}` uses two different models named `{name}`")]
+    ModelNameConflict {
+        path: String,
+        location: SchemaLocation,
+        name: String,
+    },
     #[error("{method} `{path}` matches the same requests as the route `{existing}`")]
     Conflict {
         method: Method,
         path: String,
         existing: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SchemaLocation {
+    Parameter(ParameterLocation),
+    Body,
+    Response(StatusCode),
+}
+
+impl fmt::Display for SchemaLocation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Parameter(location) => write!(formatter, "{location} parameter"),
+            Self::Body => formatter.write_str("body"),
+            Self::Response(status) => write!(formatter, "response {}", status.as_str()),
+        }
+    }
 }
 
 fn allowed_types(location: ParameterLocation) -> &'static str {

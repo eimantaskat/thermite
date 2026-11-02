@@ -10,7 +10,7 @@ use http::header::ALLOW;
 use http::{HeaderValue, Method, StatusCode};
 
 use crate::arguments::Arguments;
-use crate::description::{Parameter, RouteDescription};
+use crate::description::{Parameter, ResponseDescription, RouteDescription};
 use crate::handler::{Endpoint, Request, RequestHandler, Response, RouteHandler};
 use crate::http_error::HttpError;
 use crate::route_error::RouteError;
@@ -32,6 +32,7 @@ struct Route {
     name: Option<String>,
     tags: Vec<String>,
     inputs: Inputs,
+    responses: Vec<ResponseDescription>,
     endpoint: Box<dyn Endpoint>,
 }
 
@@ -43,6 +44,7 @@ pub(crate) struct Operation<'router> {
     pub(crate) tags: &'router [String],
     pub(crate) parameters: &'router [Parameter],
     pub(crate) body: Option<&'router Schema>,
+    pub(crate) responses: &'router [ResponseDescription],
 }
 
 enum Dispatch<'router> {
@@ -81,7 +83,7 @@ impl Router {
         let method = description.method().clone();
         let name = description.name().map(str::to_owned);
         let tags = description.tags().to_vec();
-        let inputs = check_description(description, &pattern)?;
+        let (inputs, responses) = check_description(description, &pattern)?;
         let registered = self.routes.len();
         self.routes.insert(
             method,
@@ -91,6 +93,7 @@ impl Router {
                 name,
                 tags,
                 inputs,
+                responses,
                 endpoint: Box::new(handler),
             },
         )
@@ -108,6 +111,7 @@ impl Router {
                 tags: &route.tags,
                 parameters: &route.inputs.parameters,
                 body: route.inputs.body.as_ref(),
+                responses: &route.responses,
             })
             .collect()
     }
