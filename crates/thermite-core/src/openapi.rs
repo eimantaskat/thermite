@@ -3,9 +3,11 @@ mod swagger;
 
 use bytes::Bytes;
 use http::header::CONTENT_TYPE;
-use http::{HeaderValue, Method};
+use http::{HeaderValue, Method, StatusCode};
 
+use crate::description::ResponseDescription;
 use crate::handler::{Request, Response};
+use crate::route_error::SchemaProblem;
 use crate::router::Router;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -25,6 +27,11 @@ pub enum OpenApiError {
         method: Method,
         path: String,
     },
+    #[error("the response {} that replaces the validation error {problem}", status.as_str())]
+    InvalidValidationResponse {
+        status: StatusCode,
+        problem: SchemaProblem,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +40,7 @@ pub struct OpenApi {
     version: String,
     openapi_path: Option<String>,
     docs_path: Option<String>,
+    validation_responses: Option<Vec<ResponseDescription>>,
 }
 
 impl Default for OpenApi {
@@ -42,6 +50,7 @@ impl Default for OpenApi {
             version: "0.1.0".to_owned(),
             openapi_path: Some("/openapi.json".to_owned()),
             docs_path: Some("/docs".to_owned()),
+            validation_responses: None,
         }
     }
 }
@@ -86,6 +95,16 @@ impl OpenApi {
     #[must_use]
     pub fn without_docs(mut self) -> Self {
         self.docs_path = None;
+        self
+    }
+
+    // listed instead of the core's 422 on routes that read input, for an exception handler that replaces it
+    #[must_use]
+    pub fn validation_responses(
+        mut self,
+        responses: impl IntoIterator<Item = ResponseDescription>,
+    ) -> Self {
+        self.validation_responses = Some(responses.into_iter().collect());
         self
     }
 }

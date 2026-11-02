@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
+use crate::route_error::SchemaProblem;
 use crate::validation::Location;
 
 pub(crate) use json_schema::{Components, JsonSchema, NameConflict, entries, title};
@@ -94,6 +95,30 @@ impl Schema {
             Kind::Array(items) => items.is_scalar(),
             _ => self.is_scalar(),
         }
+    }
+
+    // responses are never validated, but a wrong schema would still describe them wrongly
+    pub(crate) fn problem(&self) -> Option<SchemaProblem> {
+        if let Some(name) = self.duplicate_field() {
+            return Some(SchemaProblem::DuplicateField {
+                name: name.to_owned(),
+            });
+        }
+        if let Some(name) = self.conflicting_model_name() {
+            return Some(SchemaProblem::ModelNameConflict {
+                name: name.to_owned(),
+            });
+        }
+        // before the defaults, which an unresolved reference would let through unchecked
+        if let Some(name) = self.unresolved_reference() {
+            return Some(SchemaProblem::UnresolvedReference {
+                name: name.to_owned(),
+            });
+        }
+        self.invalid_default()
+            .map(|name| SchemaProblem::InvalidDefault {
+                name: name.to_owned(),
+            })
     }
 
     pub(crate) fn duplicate_field(&self) -> Option<&str> {

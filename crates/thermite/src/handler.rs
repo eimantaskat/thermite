@@ -1,12 +1,19 @@
+mod with_response;
+
 use std::any::type_name;
 use std::future::Future;
 use std::marker::PhantomData;
 
-use thermite_core::{Arguments, Request, Response, RouteDescription, RouteHandler};
+use http::StatusCode;
+use thermite_core::{
+    Arguments, Request, Response, ResponseDescription, RouteDescription, RouteHandler,
+};
+pub use with_response::WithResponse;
 
 use crate::arity::for_each_arity;
 use crate::dependency::DependencyCache;
 use crate::extract::FromRequest;
+use crate::model::ToSchema;
 use crate::response::{IntoResponse, describe_responses};
 use crate::state::RequiredState;
 
@@ -18,12 +25,36 @@ use crate::state::RequiredState;
     note = "a `Json<T>` output also needs `T: ToSchema`, which `#[derive(Model)]` provides"
 )]
 pub trait Handler<Extractors>: Send + Sync + 'static {
-    fn describe(description: RouteDescription) -> RouteDescription;
+    fn describe(&self, description: RouteDescription) -> RouteDescription;
 
     fn require_state(required: &mut RequiredState);
 
     fn call(&self, request: Request, arguments: Arguments)
     -> impl Future<Output = Response> + Send;
+
+    // for what the types cannot show, such as a status chosen at runtime
+    #[must_use]
+    fn response(self, status: StatusCode, description: impl Into<String>) -> WithResponse<Self>
+    where
+        Self: Sized,
+    {
+        WithResponse::new(self, ResponseDescription::new(status, description))
+    }
+
+    #[must_use]
+    fn response_with_body<Body: ToSchema>(
+        self,
+        status: StatusCode,
+        description: impl Into<String>,
+    ) -> WithResponse<Self>
+    where
+        Self: Sized,
+    {
+        WithResponse::new(
+            self,
+            ResponseDescription::new(status, description).with_schema(Body::schema()),
+        )
+    }
 }
 
 macro_rules! impl_handler {
@@ -35,7 +66,11 @@ macro_rules! impl_handler {
             $($extractor: FromRequest,)*
         {
             // what the handler answers comes first, then what each extractor rejects with
-            fn describe(description: RouteDescription) -> RouteDescription {
+            fn describe(&self, description: RouteDescription) -> RouteDescription {
+                let description = match handler_name::<Function>() {
+                    Some(name) => description.with_name(name),
+                    None => description,
+                };
                 let description = describe_responses::<Output::Output>(description);
                 <($($extractor,)*) as FromRequest>::describe(description)
             }
@@ -219,8 +254,8 @@ mod tests {
         }
     }
 
-    fn describe<Function: Handler<Extractors>, Extractors>(_: &Function) -> RouteDescription {
-        Function::describe(RouteDescription::new(Method::GET, "/items"))
+    fn describe<Function: Handler<Extractors>, Extractors>(handler: &Function) -> RouteDescription {
+        handler.describe(RouteDescription::new(Method::GET, "/items"))
     }
 
     #[test]
@@ -251,7 +286,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn adds_responses_by_hand_after_what_the_types_show_in_the_order_written() {
+        let handler = (|_: Token| async { Json(1_i64) })
+            .response(StatusCode::NOT_FOUND, "Item not found")
+            .response_with_body::<String>(StatusCode::CONFLICT, "Taken");
+
+        assert_eq!(
+            describe(&handler),
+            RouteDescription::new(Method::GET, "/items")
+                .response(
+                    ResponseDescription::new(StatusCode::OK, SUCCESSFUL_RESPONSE)
+                        .with_schema(Schema::integer())
+                )
+                .response(not_authenticated())
+                .response(ResponseDescription::new(
+                    StatusCode::NOT_FOUND,
+                    "Item not found"
+                ))
+                .response(
+                    ResponseDescription::new(StatusCode::CONFLICT, "Taken")
+                        .with_schema(Schema::string())
+                )
+        );
+    }
+
     async fn read_items() {}
+
+    #[test]
+    fn a_handler_with_responses_added_keeps_the_name_of_its_function() {
+        let handler = read_items.response(StatusCode::NOT_FOUND, "Missing");
+
+        assert_eq!(
+            describe(&handler),
+            RouteDescription::new(Method::GET, "/items")
+                .with_name("read_items")
+                .response(ResponseDescription::new(
+                    StatusCode::OK,
+                    SUCCESSFUL_RESPONSE
+                ))
+                .response(ResponseDescription::new(StatusCode::NOT_FOUND, "Missing"))
+        );
+    }
 
     // type_name's format may change between compilers, so this pins it on each toolchain bump
     #[test]

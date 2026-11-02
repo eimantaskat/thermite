@@ -1,11 +1,12 @@
+use std::any::TypeId;
 use std::error::Error as StdError;
 use std::future::Future;
 use std::sync::Arc;
 
 use http::Method;
 use thermite_core::{
-    Docs, Middleware, MiddlewareStack, Next, OpenApi, Pipeline, Request, RequestHandler, Response,
-    RouteError,
+    Docs, Middleware, MiddlewareStack, Next, OpenApi, Pipeline, Request, RequestHandler,
+    RequestValidationError, Response, RouteError,
 };
 use tokio::sync::OnceCell;
 
@@ -93,6 +94,10 @@ impl App {
         E: StdError + Send + Sync + 'static,
         Output: IntoResponse,
     {
+        // only the validation error is known to come from every route that reads input
+        if TypeId::of::<E>() == TypeId::of::<RequestValidationError>() {
+            self.openapi = self.openapi.validation_responses(Output::describe());
+        }
         self.exception_handlers.add(handler);
         self
     }

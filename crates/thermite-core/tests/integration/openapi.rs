@@ -81,6 +81,18 @@ fn documents_a_route_description_built_by_hand() -> Result<(), Box<dyn Error>> {
                 "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Item" } } }
             },
             "404": { "description": "Item not found" },
+            "413": {
+                "description": "Content Too Large",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "properties": { "detail": { "title": "Detail", "type": "string" } },
+                            "required": ["detail"],
+                            "type": "object"
+                        }
+                    }
+                }
+            },
             "422": {
                 "description": "Validation Error",
                 "content": {

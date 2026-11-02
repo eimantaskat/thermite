@@ -3,7 +3,7 @@ use std::fmt;
 use http::Method;
 use thermite_core::{RouteDescription, RouteError};
 
-use crate::handler::{Handler, HandlerEndpoint, handler_name};
+use crate::handler::{Handler, HandlerEndpoint};
 use crate::lifespan::Lifespan;
 use crate::method_routes::method_routes;
 use crate::state::RequiredState;
@@ -93,14 +93,10 @@ impl PendingRoute {
         Function: Handler<Extractors>,
         Extractors: 'static,
     {
-        let mut description = RouteDescription::new(method, path);
-        if let Some(name) = handler_name::<Function>() {
-            description = description.with_name(name);
-        }
         let mut required = RequiredState::default();
         <Function as Handler<Extractors>>::require_state(&mut required);
         Self {
-            description: <Function as Handler<Extractors>>::describe(description),
+            description: handler.describe(RouteDescription::new(method, path)),
             tags: Vec::new(),
             required,
             add: Box::new(move |router, description| {

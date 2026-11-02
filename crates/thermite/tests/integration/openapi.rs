@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use thermite::http::header::CONTENT_TYPE;
 use thermite::{
-    App, Dependency, Depends, Field, Header, IntoResponse, Json, Method, Model, ModelMismatch,
-    OpenApiError, Path, Query, Response, ResponseDescription, Server, ServerError, StatusCode,
-    Value,
+    App, Dependency, Depends, Field, Handler, Header, IntoResponse, Json, Method, Model,
+    ModelMismatch, OpenApiError, Path, Query, RequestValidationError, Response,
+    ResponseDescription, Server, ServerError, StatusCode, ToSchema, Value,
 };
 
 use crate::support::{RunningServer, TestResult};
@@ -118,6 +118,21 @@ fn validation_error_response() -> Value {
         "description": "Validation Error",
         "content": {
             "application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}
+        }
+    })
+}
+
+fn content_too_large_response() -> Value {
+    json!({
+        "description": "Content Too Large",
+        "content": {
+            "application/json": {
+                "schema": {
+                    "properties": {"detail": {"title": "Detail", "type": "string"}},
+                    "required": ["detail"],
+                    "type": "object"
+                }
+            }
         }
     })
 }
@@ -237,6 +252,7 @@ async fn documents_the_routes_in_registration_order_as_fastapi_does() -> TestRes
                         },
                         "responses": {
                             "200": successful_response(),
+                            "413": content_too_large_response(),
                             "422": validation_error_response()
                         }
                     }
@@ -507,4 +523,103 @@ impl Model for OtherItem {
     fn name() -> String {
         "Item".to_owned()
     }
+}
+
+async fn read_thing(Path(path): Path<ItemPath>) -> Response {
+    if path.item_id == 1 {
+        Json(Tag {
+            label: "hot".to_owned(),
+        })
+        .into_response()
+    } else {
+        StatusCode::NOT_FOUND.into_response()
+    }
+}
+
+#[tokio::test]
+async fn documents_responses_added_by_hand_to_a_route_that_still_runs() -> TestResult {
+    let handler = read_thing
+        .response_with_body::<Tag>(StatusCode::OK, "The tag")
+        .response(StatusCode::NOT_FOUND, "Tag not found");
+    let server = RunningServer::start(App::new().get("/things/{item_id}", handler)?).await?;
+
+    let found = fetch(&server, "/things/1").await?.text().await?;
+    let missing = fetch(&server, "/things/2").await?.status();
+    let document = document(&server).await?;
+    server.stop().await?;
+
+    let operation = &document["paths"]["/things/{item_id}"]["get"];
+    assert_eq!(found, r#"{"label":"hot"}"#);
+    assert_eq!(missing, StatusCode::NOT_FOUND);
+    assert_eq!(operation["summary"], "Read Thing");
+    assert_eq!(
+        operation["responses"],
+        json!({
+            "200": {
+                "description": "The tag",
+                "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Tag"}}}
+            },
+            "404": {"description": "Tag not found"},
+            "422": validation_error_response()
+        })
+    );
+    Ok(())
+}
+
+#[derive(Serialize, Model)]
+struct Problem {
+    message: String,
+}
+
+struct BadInput(String);
+
+impl IntoResponse for BadInput {
+    fn describe() -> Vec<ResponseDescription> {
+        vec![
+            ResponseDescription::new(StatusCode::BAD_REQUEST, "Bad input")
+                .with_schema(Problem::schema()),
+        ]
+    }
+
+    fn into_response(self) -> Response {
+        (StatusCode::BAD_REQUEST, Json(Problem { message: self.0 })).into_response()
+    }
+}
+
+#[tokio::test]
+async fn the_latest_validation_error_handler_replaces_the_422_in_the_docs() -> TestResult {
+    let app = App::new()
+        .exception_handler(|_: &RequestValidationError| StatusCode::UNPROCESSABLE_ENTITY)
+        .exception_handler(|error: &RequestValidationError| BadInput(error.to_string()))
+        .post("/items", create_item)?;
+    let server = RunningServer::start(app).await?;
+
+    let status = reqwest::Client::new()
+        .post(server.url("/items"))
+        .body("{}")
+        .send()
+        .await?
+        .status();
+    let document = document(&server).await?;
+    server.stop().await?;
+
+    let schemas: Vec<&String> = document["components"]["schemas"]
+        .as_object()
+        .ok_or("no schemas")?
+        .keys()
+        .collect();
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        document["paths"]["/items"]["post"]["responses"],
+        json!({
+            "200": successful_response(),
+            "400": {
+                "description": "Bad input",
+                "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Problem"}}}
+            },
+            "413": content_too_large_response()
+        })
+    );
+    assert_eq!(schemas, ["Item", "Problem", "Tag"]);
+    Ok(())
 }

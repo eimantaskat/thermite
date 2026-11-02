@@ -2,29 +2,47 @@ use http::StatusCode;
 use serde_json::{Value, json};
 
 use super::{OpenApi, OpenApiError};
-use crate::description::Parameter;
+use crate::description::{Parameter, ResponseDescription};
 use crate::router::{Operation, Router};
-use crate::schema::{Components, JsonSchema, NameConflict, entries, title};
+use crate::schema::{Components, JsonSchema, NameConflict, Schema, entries, title};
 
 const VALIDATION_ERROR: &str = "ValidationError";
 const HTTP_VALIDATION_ERROR: &str = "HTTPValidationError";
 
-pub(super) fn build(openapi: &OpenApi, router: &Router) -> Result<Value, OpenApiError> {
+pub(super) fn build<'docs>(
+    openapi: &'docs OpenApi,
+    router: &'docs Router,
+) -> Result<Value, OpenApiError> {
     let operations = router.operations();
     let mut components = Components::default();
-    if operations.iter().any(reads_input) {
-        components.add_built_in(HTTP_VALIDATION_ERROR, http_validation_error());
-        components.add_built_in(VALIDATION_ERROR, validation_error());
-    }
+    let validation = if let Some(responses) = &openapi.validation_responses {
+        // checked even when no route lists them, since the mistake is in the handler's output type
+        for response in responses {
+            if let Some(problem) = response.schema().and_then(Schema::problem) {
+                return Err(OpenApiError::InvalidValidationResponse {
+                    status: response.status(),
+                    problem,
+                });
+            }
+        }
+        Validation::Replaced(responses)
+    } else {
+        if operations.iter().any(reads_input) {
+            components.add_built_in(HTTP_VALIDATION_ERROR, http_validation_error());
+            components.add_built_in(VALIDATION_ERROR, validation_error());
+        }
+        Validation::Core
+    };
     let mut paths = Value::Object(JsonSchema::new());
     for operation in &operations {
-        let described = describe(operation, &mut components).map_err(|NameConflict(name)| {
-            OpenApiError::NameConflict {
-                name,
-                method: operation.method.clone(),
-                path: operation.path.to_owned(),
-            }
-        })?;
+        let described =
+            describe(operation, &validation, &mut components).map_err(|NameConflict(name)| {
+                OpenApiError::NameConflict {
+                    name,
+                    method: operation.method.clone(),
+                    path: operation.path.to_owned(),
+                }
+            })?;
         paths[operation.path][operation.method.as_str().to_lowercase()] = Value::Object(described);
     }
     let mut document = entries([
@@ -42,6 +60,12 @@ pub(super) fn build(openapi: &OpenApi, router: &Router) -> Result<Value, OpenApi
     Ok(Value::Object(document))
 }
 
+// who answers the 422 of a route that reads input
+enum Validation<'docs> {
+    Core,
+    Replaced(&'docs [ResponseDescription]),
+}
+
 fn reads_input(operation: &Operation<'_>) -> bool {
     !operation.parameters.is_empty() || operation.body.is_some()
 }
@@ -49,6 +73,7 @@ fn reads_input(operation: &Operation<'_>) -> bool {
 // in FastAPI's key order
 fn describe<'router>(
     operation: &Operation<'router>,
+    validation: &Validation<'router>,
     components: &mut Components<'router>,
 ) -> Result<JsonSchema, NameConflict> {
     let mut described = JsonSchema::new();
@@ -80,7 +105,7 @@ fn describe<'router>(
     }
     described.insert(
         "responses".to_owned(),
-        describe_responses(operation, components)?,
+        describe_responses(operation, validation, components)?,
     );
     Ok(described)
 }
@@ -95,6 +120,7 @@ struct Documented<'router> {
 // like FastAPI, a route that declares no success still gets the default one, first
 fn describe_responses<'router>(
     operation: &Operation<'router>,
+    validation: &Validation<'router>,
     components: &mut Components<'router>,
 ) -> Result<Value, NameConflict> {
     let mut documented = Vec::new();
@@ -110,24 +136,31 @@ fn describe_responses<'router>(
         });
     }
     for response in operation.responses {
-        let schema = response
-            .schema()
-            .map(|schema| schema.json_schema(components).map(Value::Object))
-            .transpose()?;
+        merge_declared(&mut documented, response, components)?;
+    }
+    // answered by the server before the app, so only a route with a body can be reached by it
+    if operation.body.is_some() {
         merge(
             &mut documented,
-            response.status(),
-            response.description(),
-            schema,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "Content Too Large",
+            Some(http_error()),
         );
     }
     if reads_input(operation) {
-        merge(
-            &mut documented,
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Validation Error",
-            Some(reference(HTTP_VALIDATION_ERROR)),
-        );
+        match validation {
+            Validation::Core => merge(
+                &mut documented,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Validation Error",
+                Some(reference(HTTP_VALIDATION_ERROR)),
+            ),
+            Validation::Replaced(responses) => {
+                for response in *responses {
+                    merge_declared(&mut documented, response, components)?;
+                }
+            }
+        }
     }
     Ok(documented
         .into_iter()
@@ -139,6 +172,24 @@ fn describe_responses<'router>(
         })
         .collect::<JsonSchema>()
         .into())
+}
+
+fn merge_declared<'router>(
+    documented: &mut Vec<Documented<'router>>,
+    response: &'router ResponseDescription,
+    components: &mut Components<'router>,
+) -> Result<(), NameConflict> {
+    let schema = response
+        .schema()
+        .map(|schema| schema.json_schema(components).map(Value::Object))
+        .transpose()?;
+    merge(
+        documented,
+        response.status(),
+        response.description(),
+        schema,
+    );
+    Ok(())
 }
 
 // unlike FastAPI, where a declared 422 replaces its own, every description and body of a status is listed
@@ -229,6 +280,15 @@ fn reference(name: &str) -> Value {
     json!({ "$ref": format!("#/components/schemas/{name}") })
 }
 
+// an HttpError whose detail is text, such as the server's 413
+fn http_error() -> Value {
+    json!({
+        "properties": { "detail": { "title": "Detail", "type": "string" } },
+        "required": ["detail"],
+        "type": "object"
+    })
+}
+
 // the shape of FastAPI's 422 body, as the core writes it
 fn http_validation_error() -> JsonSchema {
     entries([
@@ -277,8 +337,9 @@ mod tests {
 
     use super::*;
     use crate::arguments::Arguments;
-    use crate::description::{ResponseDescription, RouteDescription};
+    use crate::description::RouteDescription;
     use crate::handler::{Request, Response};
+    use crate::route_error::SchemaProblem;
     use crate::schema::{Field, Schema};
 
     fn operation(name: Option<&'static str>, path: &'static str) -> Operation<'static> {
@@ -329,14 +390,20 @@ mod tests {
         RouteDescription::new(Method::POST, "/items")
     }
 
-    fn document(description: RouteDescription) -> Result<Value, OpenApiError> {
+    fn router(descriptions: impl IntoIterator<Item = RouteDescription>) -> Router {
         let mut router = Router::new();
+        for description in descriptions {
+            router
+                .route(description, |_: Request, _: Arguments| async {
+                    Response::new(Bytes::new())
+                })
+                .unwrap();
+        }
         router
-            .route(description, |_: Request, _: Arguments| async {
-                Response::new(Bytes::new())
-            })
-            .unwrap();
-        build(&OpenApi::new(), &router)
+    }
+
+    fn document(description: RouteDescription) -> Result<Value, OpenApiError> {
+        build(&OpenApi::new(), &router([description]))
     }
 
     fn responses(description: RouteDescription) -> Value {
@@ -396,7 +463,7 @@ mod tests {
                 .response(ResponseDescription::new(StatusCode::NOT_FOUND, "Missing")),
         );
 
-        assert_eq!(statuses(&responses), ["201", "404", "422"]);
+        assert_eq!(statuses(&responses), ["201", "404", "413", "422"]);
         assert_eq!(
             responses["201"]["content"],
             json_content(json!({ "type": "integer" }))
@@ -430,7 +497,7 @@ mod tests {
                 ),
         );
 
-        assert_eq!(statuses(&responses), ["200", "422", "400"]);
+        assert_eq!(statuses(&responses), ["200", "422", "400", "413"]);
         assert_eq!(
             responses["422"],
             json!({
@@ -495,6 +562,88 @@ mod tests {
                 method: Method::POST,
                 path: "/items".to_owned()
             })
+        );
+    }
+
+    #[test]
+    fn only_a_route_with_a_body_can_be_too_large() {
+        let with_body = responses(items().body(Schema::string()));
+        let with_parameters = responses(items().parameter(Parameter::query("q", Schema::string())));
+
+        assert_eq!(statuses(&with_body), ["200", "413", "422"]);
+        assert_eq!(
+            with_body["413"],
+            json!({
+                "description": "Content Too Large",
+                "content": json_content(json!({
+                    "properties": { "detail": { "title": "Detail", "type": "string" } },
+                    "required": ["detail"],
+                    "type": "object"
+                }))
+            })
+        );
+        assert_eq!(statuses(&with_parameters), ["200", "422"]);
+    }
+
+    fn bad_request() -> ResponseDescription {
+        ResponseDescription::new(StatusCode::BAD_REQUEST, "Bad Request").with_schema(Schema::model(
+            "Problem",
+            [Field::new("message", Schema::string())],
+        ))
+    }
+
+    #[test]
+    fn replaced_validation_responses_take_the_place_of_the_core_422() {
+        let openapi = OpenApi::new().validation_responses([bad_request()]);
+        let routes = router([
+            items().parameter(Parameter::query("q", Schema::string())),
+            RouteDescription::new(Method::GET, "/health"),
+        ]);
+
+        let document = build(&openapi, &routes).unwrap();
+
+        assert_eq!(
+            document["paths"]["/items"]["post"]["responses"],
+            json!({
+                "200": { "description": "Successful Response", "content": json_content(json!({})) },
+                "400": { "description": "Bad Request", "content": json_content(reference("Problem")) }
+            })
+        );
+        assert_eq!(
+            statuses(&document["paths"]["/health"]["get"]["responses"]),
+            ["200"]
+        );
+        assert_eq!(statuses(&document["components"]["schemas"]), ["Problem"]);
+    }
+
+    #[test]
+    fn rejects_an_invalid_replaced_validation_response_without_naming_a_route() {
+        let twice = Schema::object([
+            Field::new("id", Schema::integer()),
+            Field::new("id", Schema::integer()),
+        ]);
+        let openapi = OpenApi::new().validation_responses([ResponseDescription::new(
+            StatusCode::BAD_REQUEST,
+            "Bad Request",
+        )
+        .with_schema(twice)]);
+        let with_input = router([items().body(Schema::string())]);
+        let without_input = router([RouteDescription::new(Method::GET, "/health")]);
+        let expected = OpenApiError::InvalidValidationResponse {
+            status: StatusCode::BAD_REQUEST,
+            problem: SchemaProblem::DuplicateField {
+                name: "id".to_owned(),
+            },
+        };
+
+        assert_eq!(build(&openapi, &with_input).err(), Some(expected.clone()));
+        assert_eq!(
+            build(&openapi, &without_input).err(),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            expected.to_string(),
+            "the response 400 that replaces the validation error has the field `id` more than once in one object"
         );
     }
 }

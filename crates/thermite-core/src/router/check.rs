@@ -48,38 +48,11 @@ pub(super) fn check_description(
     Ok((inputs, responses))
 }
 
-// responses are never validated, but a wrong schema would still describe them wrongly
 fn check_schema(schema: &Schema, location: SchemaLocation, path: &str) -> Result<(), RouteError> {
-    if let Some(name) = schema.duplicate_field() {
-        return Err(RouteError::DuplicateField {
-            path: path.to_owned(),
-            location,
-            name: name.to_owned(),
-        });
+    match schema.problem() {
+        Some(problem) => Err(problem.at(location, path)),
+        None => Ok(()),
     }
-    if let Some(name) = schema.conflicting_model_name() {
-        return Err(RouteError::ModelNameConflict {
-            path: path.to_owned(),
-            location,
-            name: name.to_owned(),
-        });
-    }
-    // before the defaults, which an unresolved reference would let through unchecked
-    if let Some(name) = schema.unresolved_reference() {
-        return Err(RouteError::UnresolvedReference {
-            path: path.to_owned(),
-            location,
-            name: name.to_owned(),
-        });
-    }
-    if let Some(name) = schema.invalid_default() {
-        return Err(RouteError::InvalidDefault {
-            path: path.to_owned(),
-            location,
-            name: name.to_owned(),
-        });
-    }
-    Ok(())
 }
 
 // like FastAPI, a group's dependencies come before its own values, depth first

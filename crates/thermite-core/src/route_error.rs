@@ -71,6 +71,48 @@ pub enum RouteError {
     },
 }
 
+// what is wrong with a schema, wherever it is used
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum SchemaProblem {
+    #[error("has the field `{name}` more than once in one object")]
+    DuplicateField { name: String },
+    #[error("uses two different models named `{name}`")]
+    ModelNameConflict { name: String },
+    #[error("refers to the model `{name}` outside any model of that name")]
+    UnresolvedReference { name: String },
+    #[error("has a default for `{name}` that is not a valid value of its schema")]
+    InvalidDefault { name: String },
+}
+
+impl SchemaProblem {
+    pub(crate) fn at(self, location: SchemaLocation, path: &str) -> RouteError {
+        let path = path.to_owned();
+        match self {
+            Self::DuplicateField { name } => RouteError::DuplicateField {
+                path,
+                location,
+                name,
+            },
+            Self::ModelNameConflict { name } => RouteError::ModelNameConflict {
+                path,
+                location,
+                name,
+            },
+            Self::UnresolvedReference { name } => RouteError::UnresolvedReference {
+                path,
+                location,
+                name,
+            },
+            Self::InvalidDefault { name } => RouteError::InvalidDefault {
+                path,
+                location,
+                name,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SchemaLocation {

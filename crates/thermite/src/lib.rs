@@ -21,7 +21,7 @@ pub use app::App;
 pub use dependency::{Dependency, Depends};
 pub use error::Error;
 pub use extract::{Cookie, FromRequest, Header, Path, Query};
-pub use handler::Handler;
+pub use handler::{Handler, WithResponse};
 pub use http::{self, Method, StatusCode};
 pub use json::Json;
 pub use lifespan::StartupError;
@@ -34,6 +34,6 @@ pub use state::{RequiredState, State};
 pub use thermite_core::{
     Arguments, Field, HttpError, Middleware, Next, OpenApiError, Parameter, ParameterLocation,
     Request, RequestValidationError, Response, ResponseDescription, RouteDescription, RouteError,
-    Schema, SchemaLocation, Server, ServerError, Value,
+    Schema, SchemaLocation, SchemaProblem, Server, ServerError, Value,
 };
 pub use thermite_macros::Model;
