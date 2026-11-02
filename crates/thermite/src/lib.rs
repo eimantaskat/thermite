@@ -16,8 +16,10 @@ mod resource;
 mod response;
 mod router;
 mod state;
+mod test_client;
 
 pub use app::App;
+pub use bytes::{self, Bytes};
 pub use dependency::{Dependency, Depends};
 pub use error::Error;
 pub use extract::{Cookie, FromRequest, Header, Path, Query};
@@ -31,6 +33,7 @@ pub use resource::Resource;
 pub use response::IntoResponse;
 pub use router::Router;
 pub use state::{RequiredState, State};
+pub use test_client::{TestClient, TestRequest, TestRequestError, TestResponse};
 pub use thermite_core::{
     Arguments, Field, HttpError, Middleware, Next, OpenApiError, Parameter, ParameterLocation,
     Request, RequestValidationError, Response, ResponseDescription, RouteDescription, RouteError,

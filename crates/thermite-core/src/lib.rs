@@ -25,5 +25,5 @@ pub use route_error::{RouteError, SchemaLocation, SchemaProblem};
 pub use router::Router;
 pub use schema::{Field, Schema};
 pub use serde_json::Value;
-pub use server::{Server, ServerError};
+pub use server::{InProcessServer, Server, ServerError};
 pub use validation::RequestValidationError;

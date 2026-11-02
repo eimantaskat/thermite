@@ -9,3 +9,4 @@ mod responses;
 mod routers;
 mod state;
 mod support;
+mod test_client;

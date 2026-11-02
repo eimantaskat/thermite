@@ -1,4 +1,5 @@
 mod access;
+mod in_process;
 mod panic;
 
 use std::convert::Infallible;
@@ -25,6 +26,8 @@ use crate::handler::{RequestHandler, Response};
 use crate::http_error::HttpError;
 use access::AccessLog;
 use panic::call_catching_panics;
+
+pub use in_process::InProcessServer;
 
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
