@@ -43,10 +43,7 @@ impl<'schema> Components<'schema> {
                 self.schemas.insert(name, (Some(model), schema));
             }
         }
-        Ok(entries([(
-            "$ref",
-            format!("#/components/schemas/{name}").into(),
-        )]))
+        Ok(reference(name))
     }
 }
 
@@ -70,6 +67,8 @@ impl Schema {
                 name: Some(name),
                 fields,
             } => components.model(name, self, fields)?,
+            // the model it repeats encloses it, so the components describe that model
+            Kind::Reference(name) => reference(name),
         })
     }
 }
@@ -139,6 +138,10 @@ fn object<'schema>(
     }
     schema.insert("type".to_owned(), "object".into());
     Ok(schema)
+}
+
+fn reference(name: &str) -> JsonSchema {
+    entries([("$ref", format!("#/components/schemas/{name}").into())])
 }
 
 fn of_type(name: &str) -> JsonSchema {
@@ -251,6 +254,42 @@ mod tests {
                     "properties": {"label": {"title": "Label", "type": "string"}},
                     "required": ["label"],
                     "title": "Tag",
+                    "type": "object"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn a_model_inside_itself_refers_to_its_own_description() {
+        let node = Schema::model(
+            "Node",
+            [
+                Field::new("parent", Schema::reference("Node")).optional(),
+                Field::new("children", Schema::array(Schema::reference("Node"))),
+            ],
+        );
+
+        let (schema, components) = document(&node);
+
+        assert_eq!(schema, json!({"$ref": "#/components/schemas/Node"}));
+        assert_eq!(
+            components,
+            json!({
+                "Node": {
+                    "properties": {
+                        "parent": {
+                            "anyOf": [{"$ref": "#/components/schemas/Node"}, {"type": "null"}],
+                            "title": "Parent"
+                        },
+                        "children": {
+                            "items": {"$ref": "#/components/schemas/Node"},
+                            "title": "Children",
+                            "type": "array"
+                        }
+                    },
+                    "required": ["children"],
+                    "title": "Node",
                     "type": "object"
                 }
             })

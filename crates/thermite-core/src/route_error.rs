@@ -39,6 +39,10 @@ pub enum RouteError {
     DuplicateField { path: String, name: String },
     #[error("the default of `{name}` in `{path}` is not a valid value of its schema")]
     InvalidDefault { path: String, name: String },
+    #[error("body of `{path}` refers to the model `{name}` outside any model of that name")]
+    UnresolvedReference { path: String, name: String },
+    #[error("body of `{path}` uses two different models named `{name}`")]
+    ModelNameConflict { path: String, name: String },
     #[error("{method} `{path}` matches the same requests as the route `{existing}`")]
     Conflict {
         method: Method,

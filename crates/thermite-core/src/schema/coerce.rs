@@ -1,6 +1,6 @@
 use serde_json::{Map, Number, Value};
 
-use super::{Field, Kind, Presence, Schema};
+use super::{Field, Kind, Models, Presence, Schema};
 use crate::validation::{ErrorKind, Location, ValidationError, collect_all};
 
 pub(crate) type Validated = Result<Value, Vec<ValidationError>>;
@@ -13,13 +13,30 @@ enum Coerced {
 // pydantic's lax mode: strings from a URL or JSON become numbers and booleans where they parse
 impl Schema {
     pub(crate) fn validate(&self, value: Value, location: &Location<'_>) -> Validated {
+        self.validate_within(value, location, &Models::default())
+    }
+
+    pub(super) fn validate_within(
+        &self,
+        value: Value,
+        location: &Location<'_>,
+        models: &Models<'_>,
+    ) -> Validated {
         let coerced = match &self.0 {
             Kind::String => string(&value),
             Kind::Integer => integer(&value),
             Kind::Number => number(&value),
             Kind::Boolean => boolean(&value),
-            Kind::Array(items) => return array(items, value, location),
-            Kind::Object { fields, .. } => return object(fields, value, location),
+            Kind::Array(items) => return array(items, value, location, models),
+            Kind::Object { name, fields } => {
+                let models = models.within(name.as_deref(), fields);
+                return object(fields, value, location, &models);
+            }
+            // registering the route rejects a reference without a model, so the value passes through unchecked
+            Kind::Reference(name) => match models.find(name) {
+                Some(fields) => return object(fields, value, location, models),
+                None => Ok(Coerced::Unchanged),
+            },
         };
         match coerced {
             Ok(Coerced::Unchanged) => Ok(value),
@@ -37,6 +54,16 @@ impl Field {
         location: &Location<'_>,
         container: Option<&Value>,
     ) -> Validated {
+        self.validate_within(value, location, container, &Models::default())
+    }
+
+    fn validate_within(
+        &self,
+        value: Option<Value>,
+        location: &Location<'_>,
+        container: Option<&Value>,
+        models: &Models<'_>,
+    ) -> Validated {
         match (value, &self.presence) {
             (None, Presence::Required) => Err(failure(
                 ErrorKind::Missing,
@@ -45,7 +72,7 @@ impl Field {
             )),
             (None | Some(Value::Null), Presence::Optional) => Ok(Value::Null),
             (None, Presence::Default(default)) => Ok(default.clone()),
-            (Some(value), _) => self.schema.validate(value, location),
+            (Some(value), _) => self.schema.validate_within(value, location, models),
         }
     }
 }
@@ -129,7 +156,7 @@ fn boolean(value: &Value) -> Result<Coerced, ErrorKind> {
     Ok(Coerced::Converted(Value::Bool(converted)))
 }
 
-fn array(items: &Schema, value: Value, location: &Location<'_>) -> Validated {
+fn array(items: &Schema, value: Value, location: &Location<'_>, models: &Models<'_>) -> Validated {
     let Value::Array(elements) = value else {
         return Err(failure(ErrorKind::ListType, location, value));
     };
@@ -137,12 +164,17 @@ fn array(items: &Schema, value: Value, location: &Location<'_>) -> Validated {
         elements
             .into_iter()
             .enumerate()
-            .map(|(index, element)| items.validate(element, &location.index(index))),
+            .map(|(index, element)| items.validate_within(element, &location.index(index), models)),
     )
     .map(Value::Array)
 }
 
-fn object(fields: &[Field], value: Value, location: &Location<'_>) -> Validated {
+fn object(
+    fields: &[Field],
+    value: Value,
+    location: &Location<'_>,
+    models: &Models<'_>,
+) -> Validated {
     let Value::Object(mut members) = value else {
         return Err(failure(ErrorKind::ModelAttributesType, location, value));
     };
@@ -157,7 +189,12 @@ fn object(fields: &[Field], value: Value, location: &Location<'_>) -> Validated 
             None => (field.name.clone(), None),
         };
         field
-            .validate(member, &location.key(&field.name), original.as_ref())
+            .validate_within(
+                member,
+                &location.key(&field.name),
+                original.as_ref(),
+                models,
+            )
             .map(|validated| (name, validated))
     }))
     .map(|entries| Value::Object(entries.into_iter().collect::<Map<_, _>>()))
@@ -373,6 +410,66 @@ mod tests {
                 json!(["body", "items", 1, "id"]),
                 json!("x")
             )
+        );
+    }
+
+    #[test]
+    fn validates_a_model_inside_itself_at_any_depth() {
+        let node = Schema::model(
+            "Node",
+            [
+                Field::new("id", Schema::integer()),
+                Field::new("children", Schema::array(Schema::reference("Node")))
+                    .with_default(json!([])),
+            ],
+        );
+
+        assert_eq!(
+            check(
+                &node,
+                json!({"id": "1", "children": [{"id": 2, "children": [{"id": "3"}]}]})
+            ),
+            Ok(json!({"id": 1, "children": [{"id": 2, "children": [{"id": 3, "children": []}]}]}))
+        );
+        assert_eq!(
+            check(
+                &node,
+                json!({"id": 1, "children": [{"id": 2, "children": [{"id": "x"}]}]})
+            ),
+            failed(
+                ErrorKind::IntParsing,
+                json!(["body", "children", 0, "children", 0, "id"]),
+                json!("x")
+            )
+        );
+    }
+
+    // a model of the same name further in stands for the reference, as the nearest definition
+    #[test]
+    fn a_reference_stands_for_the_nearest_model_of_its_name() {
+        let inner = Schema::model(
+            "Node",
+            [Field::new("next", Schema::reference("Node")).optional()],
+        );
+        let outer = Schema::model(
+            "Node",
+            [
+                Field::new("inner", inner),
+                Field::new("id", Schema::integer()),
+            ],
+        );
+
+        assert_eq!(
+            check(&outer, json!({"inner": {"next": {"next": null}}, "id": 1})),
+            Ok(json!({"inner": {"next": {"next": null}}, "id": 1}))
+        );
+    }
+
+    #[test]
+    fn a_reference_without_its_model_passes_the_value_through() {
+        assert_eq!(
+            check(&Schema::reference("Node"), json!("x")),
+            Ok(json!("x"))
         );
     }
 

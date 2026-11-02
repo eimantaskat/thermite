@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use thermite::{App, Field, Json, Model, Query, RouteError, Schema, StatusCode};
+use thermite::{App, Field, Json, Model, Query, RouteError, Schema, StatusCode, ToSchema};
 
 use crate::support::{RunningServer, TestResult};
 
@@ -119,6 +119,141 @@ fn a_default_that_does_not_fit_its_type_fails_when_the_route_is_registered() {
         Some(RouteError::InvalidDefault {
             path: "/items".to_owned(),
             name: "limit".to_owned()
+        })
+    );
+}
+
+#[derive(Deserialize, Model)]
+#[allow(dead_code, reason = "only the derived fields and the replies are read")]
+struct Comment {
+    text: String,
+    replies: Vec<Comment>,
+}
+
+impl Comment {
+    fn count(&self) -> usize {
+        1 + self.replies.iter().map(Comment::count).sum::<usize>()
+    }
+}
+
+#[derive(Deserialize, Model)]
+#[allow(dead_code, reason = "only the derived fields are read")]
+struct Author {
+    name: String,
+    posts: Vec<Post>,
+}
+
+#[derive(Deserialize, Model)]
+#[allow(dead_code, reason = "only the derived fields are read")]
+struct Post {
+    title: String,
+    author: Option<Author>,
+}
+
+#[test]
+fn a_model_inside_itself_is_declared_by_reference() {
+    assert_eq!(
+        Comment::schema(),
+        Schema::model(
+            "Comment",
+            [
+                Field::new("text", Schema::string()),
+                Field::new("replies", Schema::array(Schema::reference("Comment"))),
+            ]
+        )
+    );
+    assert_eq!(
+        Author::schema(),
+        Schema::model(
+            "Author",
+            [
+                Field::new("name", Schema::string()),
+                Field::new(
+                    "posts",
+                    Schema::array(Schema::model(
+                        "Post",
+                        [
+                            Field::new("title", Schema::string()),
+                            Field::new("author", Schema::reference("Author")).optional(),
+                        ]
+                    ))
+                ),
+            ]
+        )
+    );
+}
+
+async fn count_comments(Json(comment): Json<Comment>) -> String {
+    comment.count().to_string()
+}
+
+#[tokio::test]
+async fn a_model_inside_itself_validates_at_every_depth() -> TestResult {
+    let server = RunningServer::start(App::new().post("/comments", count_comments)?).await?;
+    let client = reqwest::Client::new();
+    let thread =
+        r#"{"text": "a", "replies": [{"text": "b", "replies": [{"text": "c", "replies": []}]}]}"#;
+    let broken =
+        r#"{"text": "a", "replies": [{"text": "b", "replies": [{"text": 3, "replies": []}]}]}"#;
+
+    let counted = client
+        .post(server.url("/comments"))
+        .body(thread)
+        .send()
+        .await?;
+    let rejected = client
+        .post(server.url("/comments"))
+        .body(broken)
+        .send()
+        .await?;
+
+    assert_eq!(counted.text().await?, "3");
+    assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        rejected
+            .text()
+            .await?
+            .contains(r#""loc":["body","replies",0,"replies",0,"text"]"#)
+    );
+    server.stop().await
+}
+
+mod first {
+    use serde::Deserialize;
+    use thermite::Model;
+
+    #[derive(Deserialize, Model)]
+    #[allow(dead_code, reason = "only the derived fields are read")]
+    pub struct Item {
+        inner: super::second::Item,
+        id: i64,
+    }
+}
+
+mod second {
+    use serde::Deserialize;
+    use thermite::Model;
+
+    #[derive(Deserialize, Model)]
+    #[allow(dead_code, reason = "only the derived fields are read")]
+    pub struct Item {
+        label: String,
+        back: Vec<super::first::Item>,
+    }
+}
+
+// a reference names the model by its short name, so validation could not tell the two apart
+#[test]
+fn two_models_of_one_name_in_a_body_fail_when_the_route_is_registered() {
+    let registered = App::new()
+        .without_openapi()
+        .post("/items", |_: Json<first::Item>| async {});
+
+    assert_eq!(
+        registered.err(),
+        Some(RouteError::ModelNameConflict {
+            path: "/items".to_owned(),
+            name: "Item".to_owned()
         })
     );
 }

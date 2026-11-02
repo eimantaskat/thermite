@@ -47,6 +47,27 @@ pub(super) fn check_description(
     if let Some(name) = inputs
         .body
         .as_ref()
+        .and_then(|schema| schema.conflicting_model_name())
+    {
+        return Err(RouteError::ModelNameConflict {
+            path,
+            name: name.to_owned(),
+        });
+    }
+    // before the defaults, which an unresolved reference would let through unchecked
+    if let Some(name) = inputs
+        .body
+        .as_ref()
+        .and_then(|schema| schema.unresolved_reference())
+    {
+        return Err(RouteError::UnresolvedReference {
+            path,
+            name: name.to_owned(),
+        });
+    }
+    if let Some(name) = inputs
+        .body
+        .as_ref()
         .and_then(|schema| schema.invalid_default())
     {
         return Err(RouteError::InvalidDefault {
@@ -369,6 +390,11 @@ mod tests {
                 "filter",
             ),
             (
+                items("/items").parameter(Parameter::query("node", Schema::reference("Node"))),
+                ParameterLocation::Query,
+                "node",
+            ),
+            (
                 items("/items").parameter(Parameter::header("x-filter", object)),
                 ParameterLocation::Header,
                 "x-filter",
@@ -470,5 +496,79 @@ mod tests {
             .with_default(serde_json::json!([{"label": "new"}]))]));
 
         assert_eq!(check(&description), Ok(()));
+    }
+
+    fn tree(default: serde_json::Value) -> Schema {
+        Schema::model(
+            "Node",
+            [
+                Field::new("label", Schema::string()),
+                Field::new("children", Schema::array(Schema::reference("Node")))
+                    .with_default(default),
+            ],
+        )
+    }
+
+    #[test]
+    fn rejects_a_reference_outside_a_model_of_its_name() {
+        let bare = items("/items").body(Schema::reference("Node"));
+        let elsewhere = items("/items").body(Schema::model(
+            "Tree",
+            [Field::new("root", Schema::reference("Node"))],
+        ));
+        let unnamed = items("/items").body(Schema::object([Field::new(
+            "root",
+            Schema::reference("Node"),
+        )]));
+
+        for description in [bare, elsewhere, unnamed] {
+            assert_eq!(
+                check(&description),
+                Err(RouteError::UnresolvedReference {
+                    path: "/items".to_owned(),
+                    name: "Node".to_owned()
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn checks_defaults_inside_a_model_that_contains_itself() {
+        let valid = items("/items").body(Schema::array(tree(
+            serde_json::json!([{"label": "leaf", "children": []}]),
+        )));
+        let invalid = items("/items").body(tree(serde_json::json!([{"label": 1, "children": []}])));
+
+        assert_eq!(check(&valid), Ok(()));
+        assert_eq!(
+            check(&invalid),
+            Err(RouteError::InvalidDefault {
+                path: "/items".to_owned(),
+                name: "children".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_two_different_models_of_one_name_in_a_body() {
+        let tag = Schema::model("Tag", [Field::new("label", Schema::string())]);
+        let other_tag = Schema::model("Tag", [Field::new("label", Schema::integer())]);
+        let conflicting = items("/items").body(Schema::object([
+            Field::new("main", tag.clone()),
+            Field::new("others", Schema::array(other_tag)),
+        ]));
+        let repeated = items("/items").body(Schema::object([
+            Field::new("main", tag.clone()),
+            Field::new("others", Schema::array(tag)),
+        ]));
+
+        assert_eq!(
+            check(&conflicting),
+            Err(RouteError::ModelNameConflict {
+                path: "/items".to_owned(),
+                name: "Tag".to_owned()
+            })
+        );
+        assert_eq!(check(&repeated), Ok(()));
     }
 }

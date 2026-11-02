@@ -1,4 +1,5 @@
 use std::any::type_name;
+use std::cell::RefCell;
 
 use thermite_core::{Field, Schema};
 
@@ -24,7 +25,39 @@ pub trait Model {
 
 impl<T: Model> ToSchema for T {
     fn schema() -> Schema {
-        Schema::model(T::name(), T::fields())
+        match Describing::start::<T>() {
+            Some(_describing) => Schema::model(T::name(), T::fields()),
+            None => Schema::reference(T::name()),
+        }
+    }
+}
+
+thread_local! {
+    static DESCRIBING: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+}
+
+// the models whose fields are being built on this thread, so that one met again inside itself becomes a reference
+struct Describing;
+
+impl Describing {
+    // keyed by the full type name, which tells apart two models that share a short name
+    fn start<T: ?Sized>() -> Option<Self> {
+        DESCRIBING.with_borrow_mut(|describing| {
+            let key = type_name::<T>();
+            if describing.contains(&key) {
+                None
+            } else {
+                describing.push(key);
+                Some(Self)
+            }
+        })
+    }
+}
+
+// dropped even when `fields` panics, so a caught panic leaves no model marked on the thread
+impl Drop for Describing {
+    fn drop(&mut self) {
+        DESCRIBING.with_borrow_mut(Vec::pop);
     }
 }
 
@@ -83,6 +116,9 @@ impl<T: ToSchema> ToSchema for Vec<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::panic;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use super::*;
 
     struct Item;
@@ -137,5 +173,63 @@ mod tests {
                 ]
             ))
         );
+    }
+
+    mod outer {
+        use super::*;
+
+        pub(super) struct Item;
+
+        impl Model for Item {
+            fn fields() -> Vec<Field> {
+                vec![Field::new("inner", super::inner::Item::schema())]
+            }
+        }
+    }
+
+    mod inner {
+        use super::*;
+
+        pub(super) struct Item;
+
+        impl Model for Item {
+            fn fields() -> Vec<Field> {
+                vec![Field::new("label", String::schema())]
+            }
+        }
+    }
+
+    // registering a route then reports the two names as a conflict, instead of validation reading one as the other
+    #[test]
+    fn a_model_inside_another_of_the_same_name_is_not_a_reference() {
+        assert_eq!(
+            outer::Item::schema(),
+            Schema::model(
+                "Item",
+                [Field::new(
+                    "inner",
+                    Schema::model("Item", [Field::new("label", Schema::string())])
+                )]
+            )
+        );
+    }
+
+    static FAILED_ONCE: AtomicBool = AtomicBool::new(false);
+
+    struct FailsOnce;
+
+    impl Model for FailsOnce {
+        fn fields() -> Vec<Field> {
+            assert!(FAILED_ONCE.swap(true, Ordering::SeqCst), "first call");
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn a_panic_while_building_fields_leaves_the_model_unmarked() {
+        let failed = panic::catch_unwind(FailsOnce::schema);
+
+        assert!(failed.is_err());
+        assert_eq!(FailsOnce::schema(), Schema::model("FailsOnce", []));
     }
 }
