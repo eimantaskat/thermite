@@ -18,20 +18,21 @@ use http_body_util::{BodyExt, LengthLimitError, Limited};
 use hyper::body::{Body, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
+use hyper::upgrade::OnUpgrade;
 use hyper_util::rt::{TokioIo, TokioTimer};
-use hyper_util::server::graceful::GracefulShutdown;
 use tokio::net::{TcpListener, TcpStream, ToSocketAddrs};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::task::{JoinError, JoinSet};
 
-use crate::background::take_background_tasks;
+use crate::background::{Task, take_background_tasks};
 use crate::handler::{RequestHandler, Response};
 use crate::http_error::HttpError;
+use crate::websocket::{Session, Shutdown, take_session};
 use access::AccessLog;
-use panic::{call_catching_panics, run_catching_panics};
+use panic::{call_catching_panics, run_session_catching_panics};
 use response_body::ResponseBody;
 
-pub use in_process::InProcessServer;
+pub use in_process::{InProcessServer, InProcessWebSocket, WebSocketHandshake};
 
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -115,7 +116,7 @@ impl Server {
         builder
             .timer(TokioTimer::new())
             .header_read_timeout(self.header_read_timeout);
-        let graceful = GracefulShutdown::new();
+        let (stopping, stopped) = watch::channel(false);
         let mut connections = JoinSet::new();
         let mut shutdown = std::pin::pin!(shutdown_requested());
 
@@ -125,7 +126,7 @@ impl Server {
                     Ok((stream, peer_address)) => {
                         connections.spawn(serve_connection(
                             &builder,
-                            &graceful,
+                            Shutdown::new(stopped.clone()),
                             stream,
                             peer_address,
                             Arc::clone(&handler),
@@ -147,10 +148,11 @@ impl Server {
         }
 
         drop(self.listener);
+        // connections finish the request they are on, and WebSockets close with 1012
+        stopping.send_replace(true);
         let stopping = async {
+            // a connection still runs the background tasks of its responses
             let finishing = async {
-                graceful.shutdown().await;
-                // a connection still runs the background tasks of its responses
                 while let Some(finished) = connections.join_next().await {
                     log_if_failed(finished);
                 }
@@ -179,39 +181,56 @@ impl Server {
 
 fn serve_connection<Handler: RequestHandler>(
     builder: &http1::Builder,
-    graceful: &GracefulShutdown,
+    shutdown: Shutdown,
     stream: TcpStream,
     peer_address: SocketAddr,
     handler: Arc<Handler>,
     body_limit: usize,
 ) -> impl Future<Output = ()> + Send + 'static {
-    let (sent, mut received) = mpsc::unbounded_channel();
-    let service = service_fn(move |request| {
+    let (sent, mut received) = mpsc::unbounded_channel::<Task>();
+    let session_shutdown = shutdown.clone();
+    let service = service_fn(move |mut request: http::Request<Incoming>| {
         let handler = Arc::clone(&handler);
         let sent = sent.clone();
+        let shutdown = session_shutdown.clone();
         async move {
             let access = AccessLog::start(peer_address, &request);
+            let upgrade = request.extensions_mut().remove::<OnUpgrade>();
             let mut response = handle_request(&handler, request, body_limit).await;
             access.finish(response.status());
+            if let (Some(session), Some(upgrade)) = (take_session(&mut response), upgrade) {
+                let _ = sent.send(Box::pin(run_session(session, upgrade, shutdown)));
+            }
             let tasks = take_background_tasks(&mut response);
             Ok::<_, Infallible>(response.map(|body| ResponseBody::new(body, tasks, sent)))
         }
     });
-    let connection = graceful.watch(builder.serve_connection(TokioIo::new(stream), service));
+    let connection = builder
+        .serve_connection(TokioIo::new(stream), service)
+        .with_upgrades();
     let serving = async move {
-        if let Err(error) = connection.await {
+        let mut connection = std::pin::pin!(connection);
+        let mut shutdown = shutdown;
+        let finished = tokio::select! {
+            finished = connection.as_mut() => finished,
+            () = shutdown.requested() => {
+                connection.as_mut().graceful_shutdown();
+                connection.await
+            }
+        };
+        if let Err(error) = finished {
             tracing::debug!(%error, %peer_address, "connection ended with an error");
         }
     };
-    // one response's tasks run in order, beside those of the others; dropping the set aborts them
+    // one response's tasks run in order, beside those of the others and the WebSockets; dropping the set aborts them
     let running = async move {
         let mut running = JoinSet::new();
         loop {
             tokio::select! {
                 // the channel closes once the connection and the last of its responses are dropped
-                received_tasks = received.recv() => match received_tasks {
-                    Some(tasks) => {
-                        running.spawn(run_catching_panics(tasks));
+                received_task = received.recv() => match received_task {
+                    Some(task) => {
+                        running.spawn(task);
                     }
                     None => break,
                 },
@@ -224,6 +243,24 @@ fn serve_connection<Handler: RequestHandler>(
     async move {
         tokio::join!(serving, running);
     }
+}
+
+async fn run_session(session: Session, upgrade: OnUpgrade, shutdown: Shutdown) {
+    let upgraded = match upgrade.await {
+        Ok(upgraded) => upgraded,
+        // the client went away before the 101 was sent
+        Err(error) => {
+            tracing::debug!(%error, "a WebSocket connection was not upgraded");
+            return;
+        }
+    };
+    session
+        .run(
+            Box::new(TokioIo::new(upgraded)),
+            shutdown,
+            run_session_catching_panics,
+        )
+        .await;
 }
 
 fn log_if_failed(finished: Result<(), JoinError>) {

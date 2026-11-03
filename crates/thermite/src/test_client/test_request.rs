@@ -3,7 +3,7 @@ use http::header::{CONTENT_LENGTH, CONTENT_TYPE, HOST};
 use http::request::Builder;
 use http::{HeaderName, HeaderValue, Method};
 use serde::Serialize;
-use thermite_core::InProcessServer;
+use thermite_core::{InProcessServer, Request};
 
 use super::test_response::TestResponse;
 use crate::app::App;
@@ -68,6 +68,16 @@ impl<'client> TestRequest<'client> {
     }
 
     pub async fn send(self) -> Result<TestResponse, TestRequestError> {
+        let server = self.server;
+        let request = self.build()?;
+        Ok(TestResponse::new(server.send(request).await))
+    }
+
+    pub(super) fn server(&self) -> &'client InProcessServer<App> {
+        self.server
+    }
+
+    pub(super) fn build(self) -> Result<Request, TestRequestError> {
         if !self.path.starts_with('/') {
             return Err(TestRequestError::MissingLeadingSlash { path: self.path });
         }
@@ -90,6 +100,6 @@ impl<'client> TestRequest<'client> {
         if let Some(body_type) = self.body_type {
             headers.entry(CONTENT_TYPE).or_insert(body_type);
         }
-        Ok(TestResponse::new(self.server.send(request).await))
+        Ok(request)
     }
 }

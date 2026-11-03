@@ -3,6 +3,7 @@ use http::Method;
 use crate::handler::Handler;
 use crate::method_routes::method_routes;
 use crate::route::Route;
+use crate::websocket::WebSocketHandler;
 
 // a route can read path parameters from the prefixes around it, so routes are checked once included in the app
 #[derive(Debug, Default)]
@@ -49,6 +50,20 @@ impl Router {
         #[must_use]
         Self
     );
+
+    #[must_use]
+    pub fn websocket<Function, Extractors>(
+        mut self,
+        path: impl Into<String>,
+        handler: Function,
+    ) -> Self
+    where
+        Function: WebSocketHandler<Extractors>,
+        Extractors: 'static,
+    {
+        self.routes.push(Route::websocket(path, handler));
+        self
+    }
 
     #[must_use]
     pub fn routes(mut self, routes: impl IntoIterator<Item = Route>) -> Self {

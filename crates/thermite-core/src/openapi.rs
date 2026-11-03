@@ -9,6 +9,7 @@ use crate::description::ResponseDescription;
 use crate::handler::{Request, Response};
 use crate::route_error::SchemaProblem;
 use crate::router::Router;
+use crate::websocket::is_handshake;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
@@ -176,7 +177,8 @@ impl Docs {
 
     #[must_use]
     pub fn respond(&self, request: &Request) -> Option<Response> {
-        if request.method() != Method::GET && request.method() != Method::HEAD {
+        let page_request = request.method() == Method::GET || request.method() == Method::HEAD;
+        if !page_request || is_handshake(request) {
             return None;
         }
         let page = self

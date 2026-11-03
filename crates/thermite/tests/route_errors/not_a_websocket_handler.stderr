@@ -1,0 +1,18 @@
+error[E0277]: `fn(WebSocket) -> impl Future<Output = i64> {chat}` cannot handle a WebSocket route
+ --> tests/route_errors/not_a_websocket_handler.rs:4:10
+  |
+3 | #[websocket("/chat")]
+  | --------------------- required by a bound introduced by this call
+4 | async fn chat(socket: WebSocket) -> i64 {
+  |          ^^^^ not a WebSocket handler
+  |
+  = help: the trait `WebSocketHandler<_>` is not implemented for fn item `fn(WebSocket) -> impl Future<Output = i64> {chat}`
+  = note: a WebSocket handler is an async fn taking a `WebSocket` first, then arguments that implement `FromRequest`, and returning `()` or `Result<(), WebSocketDisconnect>`
+note: required by a bound in `Route::websocket`
+ --> src/route.rs
+  |
+  |     pub fn websocket<Function, Extractors>(path: impl Into<String>, handler: Function) -> Self
+  |            --------- required by a bound in this associated function
+  |     where
+  |         Function: WebSocketHandler<Extractors>,
+  |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `Route::websocket`

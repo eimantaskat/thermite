@@ -5,11 +5,10 @@ use std::pin::pin;
 use std::sync::Arc;
 use std::task::Poll;
 
-use http::header::CONTENT_TYPE;
-use http::{HeaderValue, StatusCode};
-
 use crate::background::{Task, run_in_order};
 use crate::handler::{Request, RequestHandler, Response};
+use crate::response::internal_server_error;
+use crate::websocket::CloseCode;
 
 // like Starlette's ServerErrorMiddleware; the future is dropped, and state shared with other requests is left as by any panicking task
 pub(super) async fn call_catching_panics(
@@ -30,6 +29,20 @@ pub(super) async fn run_catching_panics(tasks: Vec<Task>) {
             panic = message(payload.as_ref()),
             "a background task panicked, skipping the tasks after it"
         );
+    }
+}
+
+// like uvicorn, a WebSocket whose handler panicked closes with 1011
+pub(super) async fn run_session_catching_panics(handler: Task) -> CloseCode {
+    match catching_panics(|| handler).await {
+        Ok(()) => CloseCode::NORMAL,
+        Err(payload) => {
+            tracing::error!(
+                panic = message(payload.as_ref()),
+                "a WebSocket handler panicked"
+            );
+            CloseCode::INTERNAL_ERROR
+        }
     }
 }
 
@@ -54,16 +67,6 @@ fn message(payload: &(dyn Any + Send)) -> &str {
     } else {
         "a value that is not a string"
     }
-}
-
-fn internal_server_error() -> Response {
-    let mut response = Response::new("Internal Server Error".into());
-    *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-    response.headers_mut().insert(
-        CONTENT_TYPE,
-        HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-    response
 }
 
 #[cfg(test)]

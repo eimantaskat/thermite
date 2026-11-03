@@ -3,6 +3,7 @@ use std::future::Future;
 use std::sync::Arc;
 
 use crate::handler::{BoxedResponseFuture, Request, Response};
+use crate::websocket::is_handshake;
 
 pub trait Middleware: Send + Sync + 'static {
     fn call(&self, request: Request, next: Next) -> impl Future<Output = Response> + Send;
@@ -60,7 +61,12 @@ impl Next {
         pipeline: &Arc<impl Pipeline>,
         request: Request,
     ) -> impl Future<Output = Response> + Send + 'static {
-        let remaining = pipeline.middleware_stack().0.len();
+        // like FastAPI's http middleware, which never sees a WebSocket
+        let remaining = if is_handshake(&request) {
+            0
+        } else {
+            pipeline.middleware_stack().0.len()
+        };
         let next = Self {
             pipeline: Arc::clone(pipeline) as Arc<dyn BoxedPipeline>,
             remaining,

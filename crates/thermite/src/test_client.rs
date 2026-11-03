@@ -1,5 +1,6 @@
 mod test_request;
 mod test_response;
+mod test_websocket;
 
 use http::Method;
 use thermite_core::{InProcessServer, ServerError};
@@ -8,6 +9,7 @@ use crate::app::App;
 
 pub use test_request::{TestRequest, TestRequestError};
 pub use test_response::TestResponse;
+pub use test_websocket::{TestWebSocket, TestWebSocketError, TestWebSocketRequest};
 
 // like `with TestClient(app)`: the app starts here, and its resources stop only in stop
 #[derive(Debug)]
@@ -69,6 +71,11 @@ impl TestClient {
 
     pub fn trace(&self, path: impl Into<String>) -> TestRequest<'_> {
         self.request(Method::TRACE, path)
+    }
+
+    // like `websocket_connect`, with the handshake headers Starlette's TestClient sends
+    pub fn websocket(&self, path: impl Into<String>) -> TestWebSocketRequest<'_> {
+        TestWebSocketRequest::new(self.request(Method::GET, path))
     }
 
     pub async fn stop(self) {

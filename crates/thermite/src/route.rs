@@ -6,6 +6,7 @@ use thermite_core::{RouteDescription, RouteError};
 use crate::handler::{Handler, HandlerEndpoint};
 use crate::lifespan::Lifespan;
 use crate::state::RequiredState;
+use crate::websocket::{WebSocketEndpoint, WebSocketHandler};
 
 type AddRoute = Box<
     dyn FnOnce(&mut thermite_core::Router, RouteDescription) -> Result<(), RouteError>
@@ -14,11 +15,18 @@ type AddRoute = Box<
 >;
 
 pub struct Route {
+    kind: Kind,
     description: RouteDescription,
     // outermost router's first, as in FastAPI
     tags: Vec<String>,
     required: RequiredState,
     add: AddRoute,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Http,
+    WebSocket,
 }
 
 impl Route {
@@ -34,11 +42,34 @@ impl Route {
         let mut required = RequiredState::default();
         <Function as Handler<Extractors>>::require_state(&mut required);
         Self {
+            kind: Kind::Http,
             description: handler.describe(RouteDescription::new(method, path)),
             tags: Vec::new(),
             required,
             add: Box::new(move |router, description| {
                 router.route(description, HandlerEndpoint::<_, Extractors>::new(handler))
+            }),
+        }
+    }
+
+    // a handshake is a GET, which only the WebSocket routes answer
+    pub fn websocket<Function, Extractors>(path: impl Into<String>, handler: Function) -> Self
+    where
+        Function: WebSocketHandler<Extractors>,
+        Extractors: 'static,
+    {
+        let mut required = RequiredState::default();
+        <Function as WebSocketHandler<Extractors>>::require_state(&mut required);
+        Self {
+            kind: Kind::WebSocket,
+            description: handler.describe(RouteDescription::new(Method::GET, path)),
+            tags: Vec::new(),
+            required,
+            add: Box::new(move |router, description| {
+                router.websocket(
+                    description,
+                    WebSocketEndpoint::<_, Extractors>::new(handler),
+                )
             }),
         }
     }
@@ -58,7 +89,7 @@ impl Route {
             .tags
             .into_iter()
             .fold(self.description, RouteDescription::with_tag);
-        let needed_by = format!("{} {}", description.method(), description.path());
+        let needed_by = shown(self.kind, &description);
         (self.add)(router, description)?;
         lifespan.require(needed_by, self.required);
         Ok(())
@@ -67,12 +98,14 @@ impl Route {
 
 impl fmt::Debug for Route {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "{} {}",
-            self.description.method(),
-            self.description.path()
-        )
+        formatter.write_str(&shown(self.kind, &self.description))
+    }
+}
+
+fn shown(kind: Kind, description: &RouteDescription) -> String {
+    match kind {
+        Kind::Http => format!("{} {}", description.method(), description.path()),
+        Kind::WebSocket => format!("WEBSOCKET {}", description.path()),
     }
 }
 

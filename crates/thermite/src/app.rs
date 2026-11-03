@@ -18,6 +18,7 @@ use crate::resource::Resource;
 use crate::response::IntoResponse;
 use crate::route::Route;
 use crate::router::Router;
+use crate::websocket::WebSocketHandler;
 
 #[derive(Debug, Default)]
 pub struct App {
@@ -125,6 +126,19 @@ impl App {
     }
 
     method_routes!(Result<Self, RouteError>);
+
+    pub fn websocket<Function, Extractors>(
+        mut self,
+        path: impl Into<String>,
+        handler: Function,
+    ) -> Result<Self, RouteError>
+    where
+        Function: WebSocketHandler<Extractors>,
+        Extractors: 'static,
+    {
+        Route::websocket(path, handler).add_to(&mut self.router, &mut self.lifespan)?;
+        Ok(self)
+    }
 
     pub fn routes(mut self, routes: impl IntoIterator<Item = Route>) -> Result<Self, RouteError> {
         for route in routes {

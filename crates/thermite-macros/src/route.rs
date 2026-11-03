@@ -4,8 +4,14 @@ use syn::{Error, ItemFn, LitStr};
 
 use crate::attributes_named;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RouteKind<'method> {
+    Method(&'method str),
+    WebSocket,
+}
+
 pub(crate) fn expand(
-    method: &str,
+    kind: RouteKind<'_>,
     path: TokenStream,
     function: TokenStream,
 ) -> syn::Result<TokenStream> {
@@ -26,7 +32,13 @@ pub(crate) fn expand(
     }
     let name = &signature.ident;
     let visibility = &function.vis;
-    let method = Ident::new(method, Span::call_site());
+    let route = match kind {
+        RouteKind::Method(method) => {
+            let method = Ident::new(method, Span::call_site());
+            quote! { ::thermite::Route::new(::thermite::Method::#method, #path, #name) }
+        }
+        RouteKind::WebSocket => quote! { ::thermite::Route::websocket(#path, #name) },
+    };
     let conditions: Vec<_> = attributes_named(&function.attrs, "cfg").collect();
     // a braced struct lives only in the type namespace, so it can share the function's name
     Ok(quote! {
@@ -42,7 +54,7 @@ pub(crate) fn expand(
         #[allow(deprecated)]
         impl #name {
             #visibility fn route() -> ::thermite::Route {
-                ::thermite::Route::new(::thermite::Method::#method, #path, #name)
+                #route
             }
         }
     })
@@ -55,11 +67,40 @@ mod tests {
     use super::*;
 
     fn expanded(path: TokenStream, function: TokenStream) -> String {
-        expand("GET", path, function).unwrap().to_string()
+        expand(RouteKind::Method("GET"), path, function)
+            .unwrap()
+            .to_string()
     }
 
     fn error(path: TokenStream, function: TokenStream) -> String {
-        expand("GET", path, function).unwrap_err().to_string()
+        expand(RouteKind::Method("GET"), path, function)
+            .unwrap_err()
+            .to_string()
+    }
+
+    #[test]
+    fn a_websocket_route_is_added_with_its_own_constructor() {
+        let function = quote! {
+            async fn chat(socket: WebSocket) {}
+        };
+
+        let expected = quote! {
+            async fn chat(socket: WebSocket) {}
+
+            #[doc(hidden)]
+            #[allow(non_camel_case_types)]
+            struct chat {}
+
+            #[allow(deprecated)]
+            impl chat {
+                fn route() -> ::thermite::Route {
+                    ::thermite::Route::websocket("/chat", chat)
+                }
+            }
+        };
+        let expanded = expand(RouteKind::WebSocket, quote!("/chat"), function).unwrap();
+
+        assert_eq!(expanded.to_string(), expected.to_string());
     }
 
     #[test]

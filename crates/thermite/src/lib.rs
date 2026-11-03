@@ -20,6 +20,7 @@ mod router;
 mod security;
 mod state;
 mod test_client;
+mod websocket;
 
 pub use app::App;
 pub use bytes::{self, Bytes};
@@ -38,15 +39,19 @@ pub use route::Route;
 pub use router::Router;
 pub use security::{NotAuthenticated, SecurityScheme};
 pub use state::{RequiredState, State};
-pub use test_client::{TestClient, TestRequest, TestRequestError, TestResponse};
+pub use test_client::{
+    TestClient, TestRequest, TestRequestError, TestResponse, TestWebSocket, TestWebSocketError,
+    TestWebSocketRequest,
+};
 pub use thermite_core::{
-    ApiKeyLocation, Arguments, BackgroundTasks, Field, HttpAuthorizationCredentials,
-    HttpBasicCredentials, HttpError, InvalidCredentials, Middleware, Next, OpenApiError, Parameter,
-    ParameterLocation, Request, RequestValidationError, Response, ResponseDescription,
+    ApiKeyLocation, Arguments, BackgroundTasks, CloseCode, Field, HttpAuthorizationCredentials,
+    HttpBasicCredentials, HttpError, InvalidCredentials, Message, Middleware, Next, OpenApiError,
+    Parameter, ParameterLocation, Request, RequestValidationError, Response, ResponseDescription,
     RouteDescription, RouteError, Schema, SchemaLocation, SchemaProblem, SecuritySchemeDescription,
-    Server, ServerError, Value, read_api_key, read_basic_credentials, read_bearer_credentials,
-    read_bearer_token,
+    Server, ServerError, Value, WebSocketDisconnect, read_api_key, read_basic_credentials,
+    read_bearer_credentials, read_bearer_token,
 };
 pub use thermite_macros::{
-    Model, SecurityScheme, delete, get, head, options, patch, post, put, trace,
+    Model, SecurityScheme, delete, get, head, options, patch, post, put, trace, websocket,
 };
+pub use websocket::{WebSocket, WebSocketConnection, WebSocketHandler, WebSocketOutput};

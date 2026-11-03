@@ -65,6 +65,10 @@ pub enum RouteError {
         location: SchemaLocation,
         name: String,
     },
+    #[error("the WebSocket route `{path}` is opened with GET, not {method}")]
+    WebSocketMethod { method: Method, path: String },
+    #[error("the WebSocket route `{path}` declares a body, which a handshake does not have")]
+    WebSocketBody { path: String },
     #[error("{method} `{path}` matches the same requests as the route `{existing}`")]
     Conflict {
         method: Method,

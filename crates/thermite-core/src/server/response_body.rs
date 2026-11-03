@@ -8,17 +8,18 @@ use http_body_util::Full;
 use hyper::body::{Body, Frame, SizeHint};
 use tokio::sync::mpsc::UnboundedSender;
 
+use super::panic::run_catching_panics;
 use crate::background::Task;
 
 // hyper drops the body once it has written the response, even one it sends without a body
 pub(super) struct ResponseBody {
     body: Full<Bytes>,
     tasks: Vec<Task>,
-    sent: UnboundedSender<Vec<Task>>,
+    sent: UnboundedSender<Task>,
 }
 
 impl ResponseBody {
-    pub(super) fn new(body: Bytes, tasks: Vec<Task>, sent: UnboundedSender<Vec<Task>>) -> Self {
+    pub(super) fn new(body: Bytes, tasks: Vec<Task>, sent: UnboundedSender<Task>) -> Self {
         Self {
             body: Full::new(body),
             tasks,
@@ -51,7 +52,8 @@ impl Drop for ResponseBody {
     fn drop(&mut self) {
         if !self.tasks.is_empty() {
             // the receiver is gone only when the connection was closed at the shutdown timeout
-            let _ = self.sent.send(mem::take(&mut self.tasks));
+            let tasks = mem::take(&mut self.tasks);
+            let _ = self.sent.send(Box::pin(run_catching_panics(tasks)));
         }
     }
 }

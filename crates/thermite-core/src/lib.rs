@@ -15,6 +15,7 @@ mod schema;
 mod security;
 mod server;
 mod validation;
+mod websocket;
 
 pub use arguments::Arguments;
 pub use background::{BackgroundTasks, attach_background_tasks};
@@ -33,5 +34,8 @@ pub use security::{
     read_bearer_token,
 };
 pub use serde_json::Value;
-pub use server::{InProcessServer, Server, ServerError};
+pub use server::{InProcessServer, InProcessWebSocket, Server, ServerError, WebSocketHandshake};
 pub use validation::RequestValidationError;
+pub use websocket::{
+    CloseCode, Message, WebSocket, WebSocketConnection, WebSocketDisconnect, WebSocketHandler,
+};
