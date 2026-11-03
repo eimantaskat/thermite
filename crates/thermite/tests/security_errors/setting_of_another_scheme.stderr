@@ -1,0 +1,5 @@
+error: `token_url` is only for `oauth2_password`
+ --> tests/security_errors/setting_of_another_scheme.rs:4:25
+  |
+4 | #[security(http_bearer, token_url = "token")]
+  |                         ^^^^^^^^^

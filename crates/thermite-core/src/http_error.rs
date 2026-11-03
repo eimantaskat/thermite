@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::handler::Response;
 use crate::response::{attach_error, json_response};
+use crate::schema::{Field, Schema};
 
 // FastAPI's HTTPException: answers `{"detail": ...}` with its status and headers
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,6 +46,11 @@ impl HttpError {
     #[must_use]
     pub fn headers(&self) -> &HeaderMap {
         &self.headers
+    }
+
+    // the body of one whose detail is text, such as the server's 413
+    pub(crate) fn text_schema() -> Schema {
+        Schema::object([Field::new("detail", Schema::string())])
     }
 
     // the response carries the error too, so that an exception handler can still read it

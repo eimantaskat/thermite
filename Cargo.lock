@@ -731,6 +731,7 @@ dependencies = [
 name = "thermite-core"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "bytes",
  "http",
  "http-body-util",

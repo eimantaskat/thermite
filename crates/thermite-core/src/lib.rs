@@ -12,6 +12,7 @@ mod response;
 mod route_error;
 mod router;
 mod schema;
+mod security;
 mod server;
 mod validation;
 
@@ -26,6 +27,11 @@ pub use response::{attach_error, response_error};
 pub use route_error::{RouteError, SchemaLocation, SchemaProblem};
 pub use router::Router;
 pub use schema::{Field, Schema};
+pub use security::{
+    ApiKeyLocation, HttpAuthorizationCredentials, HttpBasicCredentials, InvalidCredentials,
+    SecuritySchemeDescription, read_api_key, read_basic_credentials, read_bearer_credentials,
+    read_bearer_token,
+};
 pub use serde_json::Value;
 pub use server::{InProcessServer, Server, ServerError};
 pub use validation::RequestValidationError;

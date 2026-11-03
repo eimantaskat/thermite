@@ -3,8 +3,10 @@ use serde_json::{Value, json};
 
 use super::{OpenApi, OpenApiError};
 use crate::description::{Parameter, ResponseDescription};
+use crate::http_error::HttpError;
 use crate::router::{Operation, Router};
 use crate::schema::{Components, JsonSchema, NameConflict, Schema, entries, title};
+use crate::security::SecuritySchemeDescription;
 
 const VALIDATION_ERROR: &str = "ValidationError";
 const HTTP_VALIDATION_ERROR: &str = "HTTPValidationError";
@@ -34,7 +36,9 @@ pub(super) fn build<'docs>(
         Validation::Core
     };
     let mut paths = Value::Object(JsonSchema::new());
+    let mut security_schemes: Vec<&SecuritySchemeDescription> = Vec::new();
     for operation in &operations {
+        add_security_schemes(&mut security_schemes, operation)?;
         let described =
             describe(operation, &validation, &mut components).map_err(|NameConflict(name)| {
                 OpenApiError::NameConflict {
@@ -53,11 +57,49 @@ pub(super) fn build<'docs>(
         ),
         ("paths", paths),
     ]);
+    let mut documented_components = JsonSchema::new();
+    if !security_schemes.is_empty() {
+        let security_schemes = security_schemes
+            .into_iter()
+            .map(|scheme| {
+                let name = scheme.scheme_name().to_owned();
+                (name, Value::Object(scheme.json_schema()))
+            })
+            .collect::<JsonSchema>();
+        documented_components.insert("securitySchemes".to_owned(), security_schemes.into());
+    }
     let schemas = components.into_json();
     if !schemas.is_empty() {
-        document.insert("components".to_owned(), json!({ "schemas": schemas }));
+        documented_components.insert("schemas".to_owned(), schemas.into());
+    }
+    if !documented_components.is_empty() {
+        document.insert("components".to_owned(), documented_components.into());
     }
     Ok(Value::Object(document))
+}
+
+// unlike FastAPI, where the last scheme of a name replaces the others, two different ones are refused
+fn add_security_schemes<'router>(
+    known: &mut Vec<&'router SecuritySchemeDescription>,
+    operation: &Operation<'router>,
+) -> Result<(), OpenApiError> {
+    for scheme in operation.security {
+        match known
+            .iter()
+            .find(|known| known.scheme_name() == scheme.scheme_name())
+        {
+            Some(known) if *known == scheme => {}
+            Some(_) => {
+                return Err(OpenApiError::SecuritySchemeConflict {
+                    name: scheme.scheme_name().to_owned(),
+                    method: operation.method.clone(),
+                    path: operation.path.to_owned(),
+                });
+            }
+            None => known.push(scheme),
+        }
+    }
+    Ok(())
 }
 
 // who answers the 422 of a route that reads input
@@ -84,6 +126,15 @@ fn describe<'router>(
         described.insert("summary".to_owned(), title(name).into());
     }
     described.insert("operationId".to_owned(), operation_id(operation).into());
+    // like FastAPI, one requirement per scheme, which OpenAPI reads as alternatives
+    if !operation.security.is_empty() {
+        let security = operation
+            .security
+            .iter()
+            .map(|scheme| json!({ scheme.scheme_name(): [] }))
+            .collect();
+        described.insert("security".to_owned(), Value::Array(security));
+    }
     let mut parameters: Vec<&Parameter> = operation.parameters.iter().collect();
     // stable, so parameters of one location keep the order the route reads them in
     parameters.sort_by_key(|parameter| parameter.location().rank());
@@ -144,7 +195,7 @@ fn describe_responses<'router>(
             &mut documented,
             StatusCode::PAYLOAD_TOO_LARGE,
             "Content Too Large",
-            Some(http_error()),
+            Some(http_error()?),
         );
     }
     if reads_input(operation) {
@@ -280,13 +331,11 @@ fn reference(name: &str) -> Value {
     json!({ "$ref": format!("#/components/schemas/{name}") })
 }
 
-// an HttpError whose detail is text, such as the server's 413
-fn http_error() -> Value {
-    json!({
-        "properties": { "detail": { "title": "Detail", "type": "string" } },
-        "required": ["detail"],
-        "type": "object"
-    })
+// inline, so it adds nothing to the document's components
+fn http_error() -> Result<Value, NameConflict> {
+    HttpError::text_schema()
+        .json_schema(&mut Components::default())
+        .map(Value::Object)
 }
 
 // the shape of FastAPI's 422 body, as the core writes it
@@ -341,6 +390,7 @@ mod tests {
     use crate::handler::{Request, Response};
     use crate::route_error::SchemaProblem;
     use crate::schema::{Field, Schema};
+    use crate::security::ApiKeyLocation;
 
     fn operation(name: Option<&'static str>, path: &'static str) -> Operation<'static> {
         Operation {
@@ -351,6 +401,7 @@ mod tests {
             parameters: &[],
             body: None,
             responses: &[],
+            security: &[],
         }
     }
 
@@ -645,5 +696,86 @@ mod tests {
             expected.to_string(),
             "the response 400 that replaces the validation error has the field `id` more than once in one object"
         );
+    }
+
+    fn security(document: &Value, method: &str, path: &str) -> Value {
+        document["paths"][path][method]["security"].clone()
+    }
+
+    #[test]
+    fn lists_a_scheme_once_however_many_dependencies_read_it() {
+        let token = || SecuritySchemeDescription::oauth2_password("token");
+        let key = SecuritySchemeDescription::api_key(ApiKeyLocation::Header, "x-key");
+        let user = RouteDescription::new(Method::GET, "/users/me")
+            .dependency(|dependency| dependency.security(token()))
+            .security(token())
+            .security(key.clone());
+        let health = RouteDescription::new(Method::GET, "/health").security(key);
+
+        let document = build(&OpenApi::new(), &router([user, health])).unwrap();
+
+        assert_eq!(
+            security(&document, "get", "/users/me"),
+            json!([{ "OAuth2PasswordBearer": [] }, { "APIKeyHeader": [] }])
+        );
+        assert_eq!(
+            security(&document, "get", "/health"),
+            json!([{ "APIKeyHeader": [] }])
+        );
+        let schemes: Vec<&String> = document["components"]["securitySchemes"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect();
+        assert_eq!(schemes, ["OAuth2PasswordBearer", "APIKeyHeader"]);
+        assert!(document["components"].get("schemas").is_none());
+    }
+
+    // like header parameters, the names match case-insensitively, and the docs show the first as written
+    #[test]
+    fn api_keys_from_one_header_in_any_case_are_one_scheme() {
+        let key = |name| SecuritySchemeDescription::api_key(ApiKeyLocation::Header, name);
+        let routes = router([
+            RouteDescription::new(Method::GET, "/upper").security(key("X-Key")),
+            RouteDescription::new(Method::GET, "/lower").security(key("x-key")),
+        ]);
+
+        let document = build(&OpenApi::new(), &routes).unwrap();
+
+        assert_eq!(
+            document["components"]["securitySchemes"],
+            json!({ "APIKeyHeader": { "type": "apiKey", "in": "header", "name": "X-Key" } })
+        );
+    }
+
+    #[test]
+    fn refuses_two_different_schemes_of_one_name() {
+        let renamed = SecuritySchemeDescription::http_bearer().with_scheme_name("HTTPBasic");
+        let routes = router([
+            RouteDescription::new(Method::GET, "/basic")
+                .security(SecuritySchemeDescription::http_basic()),
+            RouteDescription::new(Method::GET, "/bearer").security(renamed.clone()),
+        ]);
+        let in_one_route = router([RouteDescription::new(Method::GET, "/both")
+            .security(SecuritySchemeDescription::http_basic())
+            .security(renamed)]);
+
+        let expected = OpenApiError::SecuritySchemeConflict {
+            name: "HTTPBasic".to_owned(),
+            method: Method::GET,
+            path: "/bearer".to_owned(),
+        };
+        assert_eq!(
+            build(&OpenApi::new(), &routes).err(),
+            Some(expected.clone())
+        );
+        assert_eq!(
+            expected.to_string(),
+            "the route `GET /bearer` uses a security scheme named `HTTPBasic`, but a different scheme has that name"
+        );
+        assert!(matches!(
+            build(&OpenApi::new(), &in_one_route),
+            Err(OpenApiError::SecuritySchemeConflict { .. })
+        ));
     }
 }

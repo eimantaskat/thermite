@@ -4,6 +4,7 @@ mod model;
 mod model_attributes;
 mod rename_rule;
 mod route;
+mod security_scheme;
 mod serde_attributes;
 
 use proc_macro::TokenStream;
@@ -26,6 +27,14 @@ macro_rules! method_attributes {
                 .into()
         }
     )*};
+}
+
+#[proc_macro_derive(SecurityScheme, attributes(security))]
+pub fn derive_security_scheme(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    security_scheme::expand(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
 }
 
 method_attributes!(get GET, post POST, put PUT, patch PATCH, delete DELETE, head HEAD,

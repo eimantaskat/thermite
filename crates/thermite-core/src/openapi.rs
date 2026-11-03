@@ -27,6 +27,14 @@ pub enum OpenApiError {
         method: Method,
         path: String,
     },
+    #[error(
+        "the route `{method} {path}` uses a security scheme named `{name}`, but a different scheme has that name"
+    )]
+    SecuritySchemeConflict {
+        name: String,
+        method: Method,
+        path: String,
+    },
     #[error("the response {} that replaces the validation error {problem}", status.as_str())]
     InvalidValidationResponse {
         status: StatusCode,

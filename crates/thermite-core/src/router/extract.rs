@@ -246,7 +246,7 @@ mod tests {
             &PathPattern::parse(description.path()).unwrap(),
         )
         .unwrap()
-        .0
+        .inputs
     }
 
     fn extract(

@@ -35,6 +35,8 @@ pub enum RouteError {
     },
     #[error("header parameter `{name}` of `{path}` is not a valid header name")]
     InvalidHeaderName { path: String, name: String },
+    #[error("an API key of `{path}` is read from `{name}`, which is not a valid header name")]
+    InvalidApiKeyHeader { path: String, name: String },
     #[error("`{path}` declares more than one body")]
     DuplicateBody { path: String },
     #[error("{location} of `{path}` has the field `{name}` more than once in one object")]

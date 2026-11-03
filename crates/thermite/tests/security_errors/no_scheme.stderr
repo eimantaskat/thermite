@@ -1,0 +1,5 @@
+error: add `#[security(...)]` naming a scheme: `api_key`, `http_basic`, `http_bearer` or `oauth2_password`
+ --> tests/security_errors/no_scheme.rs:4:8
+  |
+4 | struct Token(String);
+  |        ^^^^^

@@ -15,8 +15,9 @@ use crate::handler::{Endpoint, Request, RequestHandler, Response, RouteHandler};
 use crate::http_error::HttpError;
 use crate::route_error::RouteError;
 use crate::schema::Schema;
+use crate::security::SecuritySchemeDescription;
 use crate::validation::validation_failed;
-use check::{Inputs, check_description};
+use check::{Checked, Inputs, check_description};
 use extract::extract_arguments;
 use path::PathPattern;
 use table::{Lookup, RouteTable};
@@ -33,6 +34,7 @@ struct Route {
     tags: Vec<String>,
     inputs: Inputs,
     responses: Vec<ResponseDescription>,
+    security: Vec<SecuritySchemeDescription>,
     endpoint: Box<dyn Endpoint>,
 }
 
@@ -45,6 +47,7 @@ pub(crate) struct Operation<'router> {
     pub(crate) parameters: &'router [Parameter],
     pub(crate) body: Option<&'router Schema>,
     pub(crate) responses: &'router [ResponseDescription],
+    pub(crate) security: &'router [SecuritySchemeDescription],
 }
 
 enum Dispatch<'router> {
@@ -83,7 +86,11 @@ impl Router {
         let method = description.method().clone();
         let name = description.name().map(str::to_owned);
         let tags = description.tags().to_vec();
-        let (inputs, responses) = check_description(description, &pattern)?;
+        let Checked {
+            inputs,
+            responses,
+            security,
+        } = check_description(description, &pattern)?;
         let registered = self.routes.len();
         self.routes.insert(
             method,
@@ -94,6 +101,7 @@ impl Router {
                 tags,
                 inputs,
                 responses,
+                security,
                 endpoint: Box::new(handler),
             },
         )
@@ -112,6 +120,7 @@ impl Router {
                 parameters: &route.inputs.parameters,
                 body: route.inputs.body.as_ref(),
                 responses: &route.responses,
+                security: &route.security,
             })
             .collect()
     }
@@ -172,6 +181,7 @@ mod tests {
     use bytes::Bytes;
 
     use super::*;
+    use crate::security::ApiKeyLocation;
 
     #[test]
     fn debug_output_lists_the_routes() {
@@ -184,5 +194,26 @@ mod tests {
             .unwrap();
 
         assert_eq!(format!("{router:?}"), "Router { routes: [POST /items] }");
+    }
+
+    #[test]
+    fn refuses_an_api_key_read_from_an_invalid_header_name() {
+        let mut router = Router::new();
+        let description = RouteDescription::new(Method::GET, "/items").security(
+            SecuritySchemeDescription::api_key(ApiKeyLocation::Header, "x key"),
+        );
+
+        let outcome = router.route(description, |_: Request, _: Arguments| async {
+            Response::new(Bytes::new())
+        });
+
+        assert_eq!(
+            outcome,
+            Err(RouteError::InvalidApiKeyHeader {
+                path: "/items".to_owned(),
+                name: "x key".to_owned()
+            })
+        );
+        assert_eq!(format!("{router:?}"), "Router { routes: [] }");
     }
 }

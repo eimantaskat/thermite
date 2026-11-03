@@ -6,6 +6,7 @@ use http::{HeaderName, Method};
 use serde_json::Value;
 
 use crate::schema::{Field, Schema};
+use crate::security::SecuritySchemeDescription;
 pub use response::ResponseDescription;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +19,7 @@ pub struct RouteDescription {
     invalid_prefix: Option<String>,
     declarations: Declarations,
     responses: Vec<ResponseDescription>,
+    security: Vec<SecuritySchemeDescription>,
 }
 
 // what one handler or dependency declares, with what its dependencies declare nested inside
@@ -48,6 +50,7 @@ impl RouteDescription {
             invalid_prefix: None,
             declarations: Declarations::default(),
             responses: Vec::new(),
+            security: Vec::new(),
         }
     }
 
@@ -97,13 +100,22 @@ impl RouteDescription {
         self
     }
 
-    // `describe` declares into an empty description, kept as a group of its own; its responses are the route's
+    // like FastAPI, a scheme the route reads more than once is listed once
+    #[must_use]
+    pub fn security(mut self, scheme: SecuritySchemeDescription) -> Self {
+        if !self.security.contains(&scheme) {
+            self.security.push(scheme);
+        }
+        self
+    }
+
+    // `describe` declares into an empty description, kept as a group of its own; its responses and schemes are the route's
     #[must_use]
     pub fn dependency(mut self, describe: impl FnOnce(Self) -> Self) -> Self {
         let dependency = describe(Self::new(self.method.clone(), self.path.clone()));
         self.declarations.dependencies.push(dependency.declarations);
         self.responses.extend(dependency.responses);
-        self
+        dependency.security.into_iter().fold(self, Self::security)
     }
 
     #[must_use]
@@ -128,8 +140,14 @@ impl RouteDescription {
         self.invalid_prefix.as_deref()
     }
 
-    pub(crate) fn into_parts(self) -> (Declarations, Vec<ResponseDescription>) {
-        (self.declarations, self.responses)
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Declarations,
+        Vec<ResponseDescription>,
+        Vec<SecuritySchemeDescription>,
+    ) {
+        (self.declarations, self.responses, self.security)
     }
 }
 

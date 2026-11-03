@@ -13,7 +13,7 @@ pub(crate) fn parse_cookies(header: &str) -> Vec<(&str, Cow<'_, str>)> {
 }
 
 // Python's str.strip also treats the separators \x1c to \x1f as whitespace
-fn strip(text: &str) -> &str {
+pub(crate) fn strip(text: &str) -> &str {
     text.trim_matches(|character: char| {
         character.is_whitespace() || ('\x1c'..='\x1f').contains(&character)
     })

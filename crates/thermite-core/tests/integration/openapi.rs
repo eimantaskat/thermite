@@ -5,7 +5,7 @@ use http::{Method, StatusCode};
 use serde_json::{Value, json};
 use thermite_core::{
     Arguments, Docs, Field, OpenApi, Parameter, Request, Response, ResponseDescription,
-    RouteDescription, Router, Schema,
+    RouteDescription, Router, Schema, SecuritySchemeDescription,
 };
 
 use crate::support::one_route;
@@ -20,6 +20,7 @@ fn router() -> Result<Router, Box<dyn Error>> {
             .with_name("replace_item")
             .with_tag("items")
             .with_tag("admin")
+            .security(SecuritySchemeDescription::oauth2_password("token"))
             .parameter(Parameter::path("id", Schema::integer()))
             .body(Schema::model(
                 "Item",
@@ -61,6 +62,7 @@ fn documents_a_route_description_built_by_hand() -> Result<(), Box<dyn Error>> {
             "tags",
             "summary",
             "operationId",
+            "security",
             "parameters",
             "requestBody",
             "responses"
@@ -71,6 +73,20 @@ fn documents_a_route_description_built_by_hand() -> Result<(), Box<dyn Error>> {
     assert_eq!(
         document["paths"]["/items/{id}"]["put"]["operationId"],
         "replace_item_items__id__put"
+    );
+    assert_eq!(
+        operation["security"],
+        json!([{ "OAuth2PasswordBearer": [] }])
+    );
+    let components: Vec<&String> = document["components"]
+        .as_object()
+        .ok_or("no components")?
+        .keys()
+        .collect();
+    assert_eq!(components, ["securitySchemes", "schemas"]);
+    assert_eq!(
+        document["components"]["securitySchemes"]["OAuth2PasswordBearer"]["type"],
+        "oauth2"
     );
     assert_eq!(document["components"]["schemas"]["Item"]["title"], "Item");
     assert_eq!(

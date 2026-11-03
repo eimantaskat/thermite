@@ -9,6 +9,7 @@ mod openapi;
 mod responses;
 mod route_attributes;
 mod routers;
+mod security;
 mod state;
 mod support;
 mod test_client;

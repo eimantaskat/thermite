@@ -6,6 +6,7 @@ use crate::description::{
 };
 use crate::route_error::{RouteError, SchemaLocation};
 use crate::schema::Schema;
+use crate::security::SecuritySchemeDescription;
 
 // what a route reads from each request, in the order FastAPI reports its errors
 #[derive(Debug, Default)]
@@ -16,12 +17,19 @@ pub(super) struct Inputs {
     pub(super) body_position: usize,
 }
 
+// what a route keeps of its description once it is checked
+pub(super) struct Checked {
+    pub(super) inputs: Inputs,
+    pub(super) responses: Vec<ResponseDescription>,
+    pub(super) security: Vec<SecuritySchemeDescription>,
+}
+
 pub(super) fn check_description(
     description: RouteDescription,
     pattern: &PathPattern,
-) -> Result<(Inputs, Vec<ResponseDescription>), RouteError> {
+) -> Result<Checked, RouteError> {
     let path = description.path().to_owned();
-    let (declarations, responses) = description.into_parts();
+    let (declarations, responses, security) = description.into_parts();
     let mut inputs = Inputs::default();
     flatten(declarations, &path, &mut inputs)?;
     for parameter in &inputs.parameters {
@@ -45,7 +53,20 @@ pub(super) fn check_description(
             check_schema(schema, SchemaLocation::Response(response.status()), &path)?;
         }
     }
-    Ok((inputs, responses))
+    if let Some(name) = security
+        .iter()
+        .find_map(SecuritySchemeDescription::invalid_header)
+    {
+        return Err(RouteError::InvalidApiKeyHeader {
+            path,
+            name: name.to_owned(),
+        });
+    }
+    Ok(Checked {
+        inputs,
+        responses,
+        security,
+    })
 }
 
 fn check_schema(schema: &Schema, location: SchemaLocation, path: &str) -> Result<(), RouteError> {
@@ -155,7 +176,7 @@ mod tests {
             description.clone(),
             &PathPattern::parse(description.path()).unwrap(),
         )
-        .map(|(inputs, _)| inputs)
+        .map(|checked| checked.inputs)
     }
 
     fn check(description: &RouteDescription) -> Result<(), RouteError> {
