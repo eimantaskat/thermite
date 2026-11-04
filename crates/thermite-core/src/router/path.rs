@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::cmp::Ordering;
 use std::collections::HashSet;
 
 use crate::parse::percent_decode;
@@ -30,7 +29,7 @@ impl PathParameters {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Segment {
+pub(crate) enum Segment {
     Literal(String),
     Parameter(String),
 }
@@ -56,10 +55,6 @@ impl Segment {
             Self::Literal(_) => None,
             Self::Parameter(name) => Some(name),
         }
-    }
-
-    fn is_parameter(&self) -> bool {
-        matches!(self, Self::Parameter(_))
     }
 }
 
@@ -119,16 +114,8 @@ impl PathPattern {
         self.segments.iter().filter_map(Segment::parameter_name)
     }
 
-    pub(crate) fn matches(&self, segments: &[Cow<'_, str>]) -> bool {
-        self.segments.len() == segments.len()
-            && self
-                .segments
-                .iter()
-                .zip(segments)
-                .all(|(pattern, value)| match pattern {
-                    Segment::Literal(literal) => literal == value,
-                    Segment::Parameter(_) => !value.is_empty(),
-                })
+    pub(crate) fn segments(&self) -> &[Segment] {
+        &self.segments
     }
 
     pub(crate) fn parameters(&self, segments: &[Cow<'_, str>]) -> PathParameters {
@@ -144,28 +131,6 @@ impl PathPattern {
                 .collect(),
         )
     }
-
-    pub(crate) fn matches_same_paths_as(&self, other: &Self) -> bool {
-        self.segments.len() == other.segments.len()
-            && self
-                .segments
-                .iter()
-                .zip(&other.segments)
-                .all(|pair| match pair {
-                    (Segment::Literal(left), Segment::Literal(right)) => left == right,
-                    (Segment::Parameter(_), Segment::Parameter(_)) => true,
-                    _ => false,
-                })
-    }
-
-    // a literal beats a parameter at the first position where the two patterns differ
-    pub(crate) fn cmp_specificity(&self, other: &Self) -> Ordering {
-        self.segment_kinds().cmp(other.segment_kinds())
-    }
-
-    fn segment_kinds(&self) -> impl Iterator<Item = bool> {
-        self.segments.iter().map(Segment::is_parameter)
-    }
 }
 
 // splitting before decoding keeps an encoded `%2F` inside its segment
@@ -178,73 +143,10 @@ pub(crate) fn decoded_segments(path: &str) -> Vec<Cow<'_, str>> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::parse::encode_every_byte;
-
-    fn pattern(path: &str) -> PathPattern {
-        PathPattern::parse(path).unwrap()
-    }
-
-    fn match_path(pattern: &PathPattern, path: &str) -> Option<PathParameters> {
-        let segments = decoded_segments(path);
-        pattern
-            .matches(&segments)
-            .then(|| pattern.parameters(&segments))
-    }
-
-    #[test]
-    fn matches_literal_paths_exactly() {
-        let items = pattern("/items/all");
-
-        assert!(match_path(&items, "/items/all").is_some());
-        assert!(match_path(&items, "/items").is_none());
-        assert!(match_path(&items, "/items/all/").is_none());
-        assert!(match_path(&items, "/items/other").is_none());
-    }
-
-    #[test]
-    fn matches_the_root_path() {
-        assert!(match_path(&pattern("/"), "/").is_some());
-        assert!(match_path(&pattern("/"), "/items").is_none());
-    }
-
-    #[test]
-    fn captures_parameters_by_name() {
-        let parameters = match_path(
-            &pattern("/users/{user_id}/items/{item_id}"),
-            "/users/7/items/42",
-        )
-        .unwrap();
-
-        assert_eq!(parameters.get("user_id"), Some("7"));
-        assert_eq!(parameters.get("item_id"), Some("42"));
-        assert_eq!(parameters.get("missing"), None);
-    }
-
-    #[test]
-    fn does_not_match_an_empty_parameter() {
-        assert!(match_path(&pattern("/items/{id}"), "/items/").is_none());
-    }
-
-    #[test]
-    fn decodes_parameters_and_literals() {
-        let parameters = match_path(&pattern("/café/{name}"), "/caf%C3%A9/a%20b%2Fc").unwrap();
-
-        assert_eq!(parameters.get("name"), Some("a b/c"));
-    }
-
-    #[test]
-    fn decodes_literals_written_in_url_form() {
-        let encoded = pattern("/a%20b/%7Bid%7D");
-
-        assert!(match_path(&encoded, "/a%20b/%7Bid%7D").is_some());
-        assert!(match_path(&encoded, "/a%2520b/%7Bid%7D").is_none());
-        assert!(encoded.matches_same_paths_as(&pattern("/a b/%7bid%7d")));
-    }
 
     #[test]
     fn rejects_a_path_without_a_leading_slash() {
@@ -282,40 +184,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn patterns_differing_only_in_parameter_names_match_the_same_paths() {
-        assert!(pattern("/items/{id}").matches_same_paths_as(&pattern("/items/{name}")));
-        assert!(!pattern("/items/{id}").matches_same_paths_as(&pattern("/items/all")));
-        assert!(!pattern("/items/{id}").matches_same_paths_as(&pattern("/items/{id}/tags")));
-        assert!(!pattern("/items/a").matches_same_paths_as(&pattern("/items/b")));
-    }
-
-    #[test]
-    fn literal_segments_are_more_specific_than_parameters() {
-        assert_eq!(
-            pattern("/users/me").cmp_specificity(&pattern("/users/{id}")),
-            Ordering::Less
-        );
-        assert_eq!(
-            pattern("/a/{x}").cmp_specificity(&pattern("/{y}/b")),
-            Ordering::Less
-        );
-        assert_eq!(
-            pattern("/a/{x}").cmp_specificity(&pattern("/b/{y}")),
-            Ordering::Equal
-        );
-    }
-
     proptest! {
-        #[test]
-        fn a_parameter_captures_any_encoded_segment(value in ".+") {
-            let path = format!("/items/{}", encode_every_byte(&value));
-
-            let parameters = match_path(&pattern("/items/{id}"), &path);
-
-            prop_assert_eq!(parameters.as_ref().and_then(|found| found.get("id")), Some(value.as_str()));
-        }
-
         #[test]
         fn parsing_any_path_returns_without_panicking(path in "/[a-z{}/_0-9]*") {
             let _ = PathPattern::parse(&path);

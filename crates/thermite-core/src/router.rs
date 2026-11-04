@@ -34,8 +34,6 @@ pub struct Router {
 }
 
 struct Route {
-    // the table orders routes by how specific they are, while the docs list them as registered
-    registered: usize,
     name: Option<String>,
     tags: Vec<String>,
     inputs: Inputs,
@@ -103,12 +101,10 @@ impl Router {
             responses,
             security,
         } = check_description(description, &pattern)?;
-        let registered = self.routes.len();
         self.routes.insert(
             method,
             pattern,
             Route {
-                registered,
                 name,
                 tags,
                 inputs,
@@ -148,10 +144,8 @@ impl Router {
     }
 
     pub(crate) fn operations(&self) -> Vec<Operation<'_>> {
-        let mut routes: Vec<_> = self.routes.iter().collect();
-        routes.sort_by_key(|(_, _, route)| route.registered);
-        routes
-            .into_iter()
+        self.routes
+            .iter()
             .map(|(method, pattern, route)| Operation {
                 method,
                 path: pattern.as_str(),
