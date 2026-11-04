@@ -52,12 +52,12 @@ impl Node {
     }
 
     // a literal is tried before the parameter, so matching patterns come most specific first
-    fn find<'node, Found>(
+    fn find<'node, 'path, Found>(
         &'node self,
-        segments: &[Cow<'_, str>],
+        mut segments: impl Iterator<Item = Cow<'path, str>> + Clone,
         visit: &mut impl FnMut(&'node [usize]) -> Option<Found>,
     ) -> Option<Found> {
-        let Some((segment, rest)) = segments.split_first() else {
+        let Some(segment) = segments.next() else {
             return if self.entries.is_empty() {
                 None
             } else {
@@ -65,14 +65,14 @@ impl Node {
             };
         };
         self.literals
-            .binary_search_by(|(literal, _)| literal.as_str().cmp(segment))
+            .binary_search_by(|(literal, _)| literal.as_str().cmp(&segment))
             .ok()
-            .and_then(|index| self.literals[index].1.find(rest, visit))
+            .and_then(|index| self.literals[index].1.find(segments.clone(), visit))
             .or_else(|| {
                 self.parameter
                     .as_ref()
                     .filter(|_| !segment.is_empty())
-                    .and_then(|parameter| parameter.find(rest, visit))
+                    .and_then(|parameter| parameter.find(segments, visit))
             })
     }
 }
@@ -141,7 +141,7 @@ impl<T> RouteTable<T> {
     pub(crate) fn lookup<'path>(&self, method: &Method, path: &'path str) -> Lookup<'_, 'path, T> {
         let segments = path::decoded_segments(path);
 
-        let found = self.root.find(&segments, &mut |indices| {
+        let found = self.root.find(segments.clone(), &mut |indices| {
             // an explicit HEAD route beats the GET fallback, which hyper answers without the body
             self.entries_at(indices)
                 .find(|entry| entry.method == method)
@@ -153,12 +153,12 @@ impl<T> RouteTable<T> {
         if let Some(entry) = found {
             return Lookup::Found {
                 value: &entry.value,
-                parameters: entry.pattern.parameters(&segments),
+                parameters: entry.pattern.parameters(segments),
             };
         }
 
         let mut allowed = Vec::new();
-        self.root.find(&segments, &mut |indices| {
+        self.root.find(segments, &mut |indices| {
             self.entries_at(indices)
                 .for_each(|entry| allow(&mut allowed, &entry.method));
             None::<()>
@@ -473,7 +473,7 @@ mod tests {
                 .map(|segment| matches!(segment, Segment::Parameter(_)))
                 .collect::<Vec<_>>()
         });
-        let segments = path::decoded_segments(path);
+        let segments: Vec<_> = path::decoded_segments(path).collect();
         let matching: Vec<_> = sorted
             .into_iter()
             .filter(|(_, pattern)| pattern_matches(pattern, &segments))
@@ -497,7 +497,7 @@ mod tests {
             Some((candidate, pattern)) => format!(
                 "{candidate} {} {:?}",
                 pattern.as_str(),
-                pattern.parameters(&segments)
+                pattern.parameters(segments.iter().cloned())
             ),
             None if matching.is_empty() => "404".to_owned(),
             None => {

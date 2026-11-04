@@ -125,27 +125,24 @@ impl PathPattern {
 
     pub(crate) fn parameters<'path>(
         &self,
-        segments: &[Cow<'path, str>],
+        segments: impl Iterator<Item = Cow<'path, str>>,
     ) -> PathParameters<'_, 'path> {
         PathParameters(
             self.segments
                 .iter()
                 .zip(segments)
-                .filter_map(|(pattern, value)| {
-                    pattern.parameter_name().map(|name| (name, value.clone()))
-                })
+                .filter_map(|(pattern, value)| pattern.parameter_name().map(|name| (name, value)))
                 .collect(),
         )
     }
 }
 
 // splitting before decoding keeps an encoded `%2F` inside its segment
-pub(crate) fn decoded_segments(path: &str) -> Vec<Cow<'_, str>> {
+pub(crate) fn decoded_segments(path: &str) -> impl Iterator<Item = Cow<'_, str>> + Clone {
     path.strip_prefix('/')
         .unwrap_or(path)
         .split('/')
         .map(percent_decode)
-        .collect()
 }
 
 #[cfg(test)]
