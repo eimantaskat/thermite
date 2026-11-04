@@ -1,5 +1,5 @@
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use http::StatusCode;
 use serde_json::{Value, json};
@@ -143,7 +143,7 @@ impl ValidationError {
         self
     }
 
-    fn into_json(self) -> Value {
+    fn to_json(&self) -> Value {
         let (kind, message) = self.kind.type_and_message();
         let mut error = json!({
             "type": kind,
@@ -151,10 +151,26 @@ impl ValidationError {
             "msg": message,
             "input": self.input,
         });
-        if let Some(context) = self.context {
-            error["ctx"] = context;
+        if let Some(context) = &self.context {
+            error["ctx"] = context.clone();
         }
         error
+    }
+}
+
+// written straight from the errors, since building a `Value` per error first doubles the work
+impl fmt::Display for ValidationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (kind, message) = self.kind.type_and_message();
+        write!(
+            formatter,
+            r#"{{"type":"{kind}","loc":{},"msg":"{message}","input":{}"#,
+            self.location, self.input
+        )?;
+        if let Some(context) = &self.context {
+            write!(formatter, r#","ctx":{context}"#)?;
+        }
+        formatter.write_str("}")
     }
 }
 
@@ -178,17 +194,35 @@ pub(crate) fn collect_all<T>(
 }
 
 // FastAPI's RequestValidationError, whose errors are the `detail` of its 422
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct RequestValidationError {
-    errors: Vec<Value>,
+    errors: Vec<ValidationError>,
+    // built only when an exception handler asks, since the 422 body is written without them
+    values: OnceLock<Vec<Value>>,
 }
 
 impl RequestValidationError {
+    fn new(errors: Vec<ValidationError>) -> Self {
+        Self {
+            errors,
+            values: OnceLock::new(),
+        }
+    }
+
     #[must_use]
     pub fn errors(&self) -> &[Value] {
-        &self.errors
+        self.values
+            .get_or_init(|| self.errors.iter().map(ValidationError::to_json).collect())
     }
 }
+
+impl PartialEq for RequestValidationError {
+    fn eq(&self, other: &Self) -> bool {
+        self.errors == other.errors
+    }
+}
+
+impl Eq for RequestValidationError {}
 
 impl fmt::Display for RequestValidationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -200,28 +234,58 @@ impl fmt::Display for RequestValidationError {
 
 impl std::error::Error for RequestValidationError {}
 
+struct Detail<'errors>(&'errors [ValidationError]);
+
+impl fmt::Display for Detail<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(r#"{"detail":["#)?;
+        for (index, error) in self.0.iter().enumerate() {
+            if index > 0 {
+                formatter.write_str(",")?;
+            }
+            write!(formatter, "{error}")?;
+        }
+        formatter.write_str("]}")
+    }
+}
+
 pub(crate) fn validation_failed(errors: Vec<ValidationError>) -> Response {
-    let errors: Vec<Value> = errors.into_iter().map(ValidationError::into_json).collect();
     let mut response = json_response(
         StatusCode::UNPROCESSABLE_ENTITY,
-        json!({ "detail": errors }).to_string(),
+        Detail(&errors).to_string(),
     );
-    attach_error(&mut response, Arc::new(RequestValidationError { errors }));
+    attach_error(&mut response, Arc::new(RequestValidationError::new(errors)));
     response
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::response::response_error;
+
+    const KINDS: [ErrorKind; 14] = [
+        ErrorKind::Missing,
+        ErrorKind::StringType,
+        ErrorKind::IntType,
+        ErrorKind::IntParsing,
+        ErrorKind::IntFromFloat,
+        ErrorKind::IntParsingSize,
+        ErrorKind::FloatType,
+        ErrorKind::FloatParsing,
+        ErrorKind::FiniteNumber,
+        ErrorKind::BoolType,
+        ErrorKind::BoolParsing,
+        ErrorKind::ListType,
+        ErrorKind::ModelAttributesType,
+        ErrorKind::JsonInvalid,
+    ];
 
     #[test]
     fn a_request_validation_error_counts_its_errors() {
-        let one = RequestValidationError {
-            errors: vec![json!({"type": "missing"})],
-        };
-        let two = RequestValidationError {
-            errors: vec![json!({"type": "missing"}), json!({"type": "int_parsing"})],
-        };
+        let missing = ValidationError::at(ErrorKind::Missing, json!(["body"]), json!({}));
+        let one = RequestValidationError::new(vec![missing.clone()]);
+        let two = RequestValidationError::new(vec![missing.clone(), missing]);
 
         assert_eq!(one.to_string(), "1 validation error in the request");
         assert_eq!(two.to_string(), "2 validation errors in the request");
@@ -229,23 +293,7 @@ mod tests {
 
     #[test]
     fn uses_the_type_and_message_pairs_of_pydantic() {
-        let pairs = [
-            ErrorKind::Missing,
-            ErrorKind::StringType,
-            ErrorKind::IntType,
-            ErrorKind::IntParsing,
-            ErrorKind::IntFromFloat,
-            ErrorKind::IntParsingSize,
-            ErrorKind::FloatType,
-            ErrorKind::FloatParsing,
-            ErrorKind::FiniteNumber,
-            ErrorKind::BoolType,
-            ErrorKind::BoolParsing,
-            ErrorKind::ListType,
-            ErrorKind::ModelAttributesType,
-            ErrorKind::JsonInvalid,
-        ]
-        .map(ErrorKind::type_and_message);
+        let pairs = KINDS.map(ErrorKind::type_and_message);
 
         assert_eq!(
             pairs,
@@ -320,5 +368,51 @@ mod tests {
                 r"]}"
             )
         );
+    }
+
+    #[test]
+    fn types_and_messages_need_no_escaping_in_json() {
+        for (kind, message) in KINDS.map(ErrorKind::type_and_message) {
+            assert_eq!(Value::from(kind).to_string(), format!("\"{kind}\""));
+            assert_eq!(Value::from(message).to_string(), format!("\"{message}\""));
+        }
+    }
+
+    #[test]
+    fn the_body_holds_the_errors_an_exception_handler_sees() {
+        let errors = KINDS
+            .into_iter()
+            .enumerate()
+            .map(|(index, kind)| {
+                let error = ValidationError::at(
+                    kind,
+                    json!(["body", "a \"quoted\" key", index]),
+                    json!({ "text": "line\nbreak \u{e9}", "list": [1.5, null, true] }),
+                );
+                if index % 2 == 0 {
+                    error.with_context(json!({ "error": "back\\slash" }))
+                } else {
+                    error
+                }
+            })
+            .collect();
+
+        let response = validation_failed(errors);
+        let body: Value = serde_json::from_slice(response.body()).unwrap();
+        let error = response_error(&response)
+            .and_then(|error| error.downcast_ref::<RequestValidationError>())
+            .unwrap();
+
+        assert_eq!(body, json!({ "detail": error.errors() }));
+    }
+
+    #[test]
+    fn equality_ignores_whether_the_errors_were_built_as_json() {
+        let missing = ValidationError::at(ErrorKind::Missing, json!(["body"]), json!({}));
+        let built = RequestValidationError::new(vec![missing.clone()]);
+        let unbuilt = RequestValidationError::new(vec![missing]);
+
+        assert_eq!(built.errors().len(), 1);
+        assert_eq!(built, unbuilt);
     }
 }
