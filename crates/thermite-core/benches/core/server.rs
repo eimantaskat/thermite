@@ -23,15 +23,26 @@ async fn answer_body_length(request: Request, _: Arguments) -> Response {
     Response::new(request.body().len().to_string().into())
 }
 
-async fn echo(_: Request, _: Arguments, socket: WebSocket) {
+async fn echo_times(socket: WebSocket, times: usize) {
     let Ok(mut connection) = socket.accept().await else {
         return;
     };
     while let Ok(message) = connection.receive().await {
-        if connection.send(message).await.is_err() {
-            return;
+        for _ in 0..times {
+            if connection.send(message.clone()).await.is_err() {
+                return;
+            }
         }
     }
+}
+
+async fn echo(_: Request, _: Arguments, socket: WebSocket) {
+    echo_times(socket, 1).await;
+}
+
+// two writes before the next read, which Nagle's algorithm holds back until the first is acknowledged
+async fn echo_twice(_: Request, _: Arguments, socket: WebSocket) {
+    echo_times(socket, 2).await;
 }
 
 pub fn app() -> Router {
@@ -48,6 +59,9 @@ pub fn app() -> Router {
     router
         .websocket(RouteDescription::new(Method::GET, "/ws"), echo)
         .expect("the WebSocket route");
+    router
+        .websocket(RouteDescription::new(Method::GET, "/ws/twice"), echo_twice)
+        .expect("the twice echoing WebSocket route");
     router
 }
 
@@ -156,11 +170,16 @@ fn http(criterion: &mut Criterion) {
     group.finish();
 }
 
-async fn connect_websocket(address: SocketAddr) -> tokio_tungstenite::WebSocketStream<TcpStream> {
-    let (socket, _) =
-        tokio_tungstenite::client_async(format!("ws://{address}/ws"), open_stream(address).await)
-            .await
-            .expect("an accepted handshake");
+async fn connect_websocket(
+    address: SocketAddr,
+    path: &str,
+) -> tokio_tungstenite::WebSocketStream<TcpStream> {
+    let (socket, _) = tokio_tungstenite::client_async(
+        format!("ws://{address}{path}"),
+        open_stream(address).await,
+    )
+    .await
+    .expect("an accepted handshake");
     socket
 }
 
@@ -168,25 +187,31 @@ fn websocket(criterion: &mut Criterion) {
     let runtime = runtime();
     let address = start(&runtime);
     let mut group = criterion.benchmark_group("websocket");
+    let small = tungstenite::Message::text("hello");
     let cases = [
-        ("echo/small", tungstenite::Message::text("hello")),
+        ("echo/small", "/ws", small.clone(), 1),
         (
             "echo/1_mib",
+            "/ws",
             tungstenite::Message::binary(Bytes::from(vec![b'a'; MEBIBYTE])),
+            1,
         ),
+        ("echo_twice/small", "/ws/twice", small, 2),
     ];
-    for (name, message) in cases {
+    for (name, path, message, replies) in cases {
         group.throughput(Throughput::Bytes(message.len() as u64));
         group.bench_function(name, |bencher| {
             bencher.to_async(&runtime).iter_custom(|iterations| {
                 let message = &message;
                 async move {
-                    let mut socket = connect_websocket(address).await;
+                    let mut socket = connect_websocket(address, path).await;
                     let started = Instant::now();
                     for _ in 0..iterations {
                         socket.send(message.clone()).await.expect("a sent message");
-                        let echoed = socket.next().await.expect("an open socket");
-                        black_box(echoed.expect("an echoed message"));
+                        for _ in 0..replies {
+                            let echoed = socket.next().await.expect("an open socket");
+                            black_box(echoed.expect("an echoed message"));
+                        }
                     }
                     started.elapsed()
                 }
