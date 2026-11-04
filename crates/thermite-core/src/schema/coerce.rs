@@ -183,22 +183,22 @@ fn object(
         && members
             .keys()
             .zip(fields)
-            .all(|(name, field)| *name == field.name)
+            .all(|(name, field)| name == field.name())
     {
         validate_in_place(fields.iter().zip(members.values_mut()), |field, member| {
-            field.validate_within(Some(member), &location.key(&field.name), None, models)
+            field.validate_within(Some(member), &location.key(field.name()), None, models)
         })?;
         return Ok(Value::Object(members));
     }
     // fields are moved out below, so keep a copy for the error input only when one is missing
     let original = fields
         .iter()
-        .any(|field| field.is_required() && !members.contains_key(&field.name))
+        .any(|field| field.is_required() && !members.contains_key(field.name()))
         .then(|| Value::Object(members.clone()));
     collect_all(fields.iter().map(|field| {
-        let (name, member) = match members.remove_entry(&field.name) {
+        let (name, member) = match members.remove_entry(field.name()) {
             Some((name, member)) => (name, Some(member)),
-            None => (field.name.clone(), None),
+            None => (field.name().to_owned(), None),
         };
         field
             .validate_within(

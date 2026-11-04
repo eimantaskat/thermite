@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::sync::Arc;
 
 use http::HeaderName;
 use http::header::{CONTENT_TYPE, COOKIE};
@@ -15,7 +16,7 @@ use crate::validation::{ErrorKind, Location, ValidationError, collect_all};
 
 pub(super) fn extract_arguments(
     inputs: &Inputs,
-    path_parameters: &PathParameters,
+    path_parameters: &PathParameters<'_>,
     request: &Request,
 ) -> Result<Arguments, Vec<ValidationError>> {
     // like FastAPI, a body that is not JSON fails on its own, before any parameter is checked
@@ -93,13 +94,12 @@ pub(super) fn extract_arguments(
 fn validate_parameter(
     parameter: &Parameter,
     input: Option<Value>,
-) -> Result<(ParameterLocation, String, Value), Vec<ValidationError>> {
-    let name = parameter.field().name();
+) -> Result<(ParameterLocation, Arc<str>, Value), Vec<ValidationError>> {
+    let field = parameter.field();
     let root = Location::root(parameter.location().as_str());
-    parameter
-        .field()
-        .validate(input, &root.key(name), None)
-        .map(|value| (parameter.location(), name.to_owned(), value))
+    field
+        .validate(input, &root.key(field.name()), None)
+        .map(|value| (parameter.location(), Arc::clone(field.shared_name()), value))
 }
 
 // a list collects every value of a repeated name, a single value takes the last one like Starlette

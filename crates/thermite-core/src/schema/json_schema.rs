@@ -121,14 +121,14 @@ fn object<'schema>(
     let mut properties = JsonSchema::new();
     for field in fields {
         properties.insert(
-            field.name.clone(),
+            field.name().to_owned(),
             Value::Object(field.json_schema(components)?),
         );
     }
     let required: Vec<Value> = fields
         .iter()
         .filter(|field| field.is_required())
-        .map(|field| field.name.as_str().into())
+        .map(|field| field.name().into())
         .collect();
     let mut schema = entries([("properties", Value::Object(properties))]);
     if !required.is_empty() {

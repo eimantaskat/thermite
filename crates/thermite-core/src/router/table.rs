@@ -80,7 +80,7 @@ impl Node {
 pub(crate) enum Lookup<'table, T> {
     Found {
         value: &'table T,
-        parameters: PathParameters,
+        parameters: PathParameters<'table>,
     },
     MethodNotAllowed {
         allowed: Vec<Method>,
@@ -197,6 +197,8 @@ fn allow(allowed: &mut Vec<Method>, method: &Method) {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use std::collections::HashMap;
+
     use proptest::prelude::*;
 
     use super::*;
@@ -223,9 +225,14 @@ mod tests {
         }
     }
 
-    fn match_path(pattern: &str, path: &str) -> Option<PathParameters> {
+    fn match_path(pattern: &str, path: &str) -> Option<HashMap<String, String>> {
         match table(&[(Method::GET, pattern)]).lookup(&Method::GET, path) {
-            Lookup::Found { parameters, .. } => Some(parameters),
+            Lookup::Found { parameters, .. } => Some(
+                parameters
+                    .iter()
+                    .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                    .collect(),
+            ),
             _ => None,
         }
     }
@@ -249,8 +256,8 @@ mod tests {
         let parameters =
             match_path("/users/{user_id}/items/{item_id}", "/users/7/items/42").unwrap();
 
-        assert_eq!(parameters.get("user_id"), Some("7"));
-        assert_eq!(parameters.get("item_id"), Some("42"));
+        assert_eq!(parameters.get("user_id").map(String::as_str), Some("7"));
+        assert_eq!(parameters.get("item_id").map(String::as_str), Some("42"));
         assert_eq!(parameters.get("missing"), None);
     }
 
@@ -263,7 +270,7 @@ mod tests {
     fn decodes_parameters_and_literals() {
         let parameters = match_path("/café/{name}", "/caf%C3%A9/a%20b%2Fc").unwrap();
 
-        assert_eq!(parameters.get("name"), Some("a b/c"));
+        assert_eq!(parameters.get("name").map(String::as_str), Some("a b/c"));
     }
 
     #[test]
@@ -542,7 +549,7 @@ mod tests {
 
             let parameters = match_path("/items/{id}", &path);
 
-            prop_assert_eq!(parameters.as_ref().and_then(|found| found.get("id")), Some(value.as_str()));
+            prop_assert_eq!(parameters.as_ref().and_then(|found| found.get("id")), Some(&value));
         }
 
         #[test]

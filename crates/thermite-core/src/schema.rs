@@ -2,6 +2,7 @@ mod coerce;
 mod json_schema;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use serde_json::Value;
 
@@ -128,8 +129,8 @@ impl Schema {
                 let mut seen = HashSet::new();
                 fields
                     .iter()
-                    .find(|field| !seen.insert(field.name.as_str()))
-                    .map(|field| field.name.as_str())
+                    .find(|field| !seen.insert(field.name()))
+                    .map(Field::name)
                     .or_else(|| {
                         fields
                             .iter()
@@ -208,7 +209,8 @@ impl Schema {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Field {
-    name: String,
+    // shared with the arguments of every request instead of copied into them
+    name: Arc<str>,
     schema: Schema,
     presence: Presence,
 }
@@ -225,7 +227,7 @@ impl Field {
     #[must_use]
     pub fn new(name: impl Into<String>, schema: Schema) -> Self {
         Self {
-            name: name.into(),
+            name: name.into().into(),
             schema,
             presence: Presence::Required,
         }
@@ -245,12 +247,16 @@ impl Field {
 
     #[must_use]
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
-        self.name = name.into();
+        self.name = name.into().into();
         self
     }
 
     #[must_use]
     pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(crate) fn shared_name(&self) -> &Arc<str> {
         &self.name
     }
 

@@ -1,16 +1,18 @@
+use std::sync::Arc;
+
 use serde_json::Value;
 
 use crate::description::ParameterLocation;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Arguments {
-    parameters: Vec<(ParameterLocation, String, Value)>,
+    parameters: Vec<(ParameterLocation, Arc<str>, Value)>,
     body: Option<Value>,
 }
 
 impl Arguments {
     pub(crate) fn new(
-        parameters: Vec<(ParameterLocation, String, Value)>,
+        parameters: Vec<(ParameterLocation, Arc<str>, Value)>,
         body: Option<Value>,
     ) -> Self {
         Self { parameters, body }
@@ -49,7 +51,7 @@ impl Arguments {
                 *found_location == location
                     && match location {
                         ParameterLocation::Header => found_name.eq_ignore_ascii_case(name),
-                        _ => found_name == name,
+                        _ => **found_name == *name,
                     }
             })
             .map(|(_, _, value)| value)
@@ -66,12 +68,8 @@ mod tests {
     fn finds_headers_in_any_case_and_other_names_exactly() {
         let arguments = Arguments::new(
             vec![
-                (
-                    ParameterLocation::Header,
-                    "X-Token".to_owned(),
-                    json!("secret"),
-                ),
-                (ParameterLocation::Query, "Limit".to_owned(), json!(5)),
+                (ParameterLocation::Header, "X-Token".into(), json!("secret")),
+                (ParameterLocation::Query, "Limit".into(), json!(5)),
             ],
             None,
         );
