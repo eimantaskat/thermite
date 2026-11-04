@@ -21,9 +21,20 @@ tokio-tungstenite.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
+hyper = { workspace = true, features = ["client", "http1", "server"] }
 proptest.workspace = true
 reqwest.workspace = true
 tokio = { workspace = true, features = ["io-util", "sync", "test-util"] }
+
+[[bench]]
+name = "core"
+harness = false
+
+# a binary of its own, so the other benchmarks run with no tracing subscriber registered
+[[bench]]
+name = "access_log"
+harness = false
 
 [lints]
 workspace = true

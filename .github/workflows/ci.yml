@@ -37,6 +37,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --all-features
 
+  # each benchmark runs once, so one that no longer sets up fails here rather than in a timing run
+  benches:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo bench --workspace --bench core --bench access_log --bench app -- --test
+
   coverage:
     runs-on: ubuntu-latest
     steps:
