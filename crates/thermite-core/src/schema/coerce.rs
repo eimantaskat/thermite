@@ -186,7 +186,7 @@ fn object(
             .all(|(name, field)| name == field.name())
     {
         validate_in_place(fields.iter().zip(members.values_mut()), |field, member| {
-            field.validate_within(Some(member), &location.key(field.name()), None, models)
+            field.validate_within(Some(member), &location.key(&field.name), None, models)
         })?;
         return Ok(Value::Object(members));
     }

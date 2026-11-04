@@ -98,7 +98,7 @@ fn validate_parameter(
     let field = parameter.field();
     let root = Location::root(parameter.location().as_str());
     field
-        .validate(input, &root.key(field.name()), None)
+        .validate(input, &root.key(field.shared_name()), None)
         .map(|value| (parameter.location(), Arc::clone(field.shared_name()), value))
 }
 

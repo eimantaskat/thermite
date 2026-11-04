@@ -1,4 +1,4 @@
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::sync::{Arc, OnceLock};
 
 use http::StatusCode;
@@ -67,8 +67,79 @@ impl ErrorKind {
 
 #[derive(Debug, Clone, Copy)]
 enum LocationItem<'text> {
-    Key(&'text str),
+    Source(&'static str),
+    Key(&'text Arc<str>),
     Index(usize),
+}
+
+// what an error keeps of its location: sources and names shared, never copied into strings
+#[derive(Debug, Clone)]
+enum Segment {
+    Source(&'static str),
+    Key(Arc<str>),
+    Index(usize),
+}
+
+impl Segment {
+    fn key(&self) -> Option<&str> {
+        match self {
+            Self::Source(source) => Some(source),
+            Self::Key(key) => Some(key),
+            Self::Index(_) => None,
+        }
+    }
+
+    fn index(&self) -> Option<usize> {
+        match self {
+            Self::Index(index) => Some(*index),
+            Self::Source(_) | Self::Key(_) => None,
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        match self.key() {
+            Some(key) => Value::from(key),
+            None => Value::from(self.index()),
+        }
+    }
+}
+
+// a source and a key of the same text are the same `loc` entry
+impl PartialEq for Segment {
+    fn eq(&self, other: &Self) -> bool {
+        self.key() == other.key() && self.index() == other.index()
+    }
+}
+
+impl Eq for Segment {}
+
+impl fmt::Display for Segment {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Source(source) => write_json_string(formatter, source),
+            Self::Key(key) => write_json_string(formatter, key),
+            Self::Index(index) => write!(formatter, "{index}"),
+        }
+    }
+}
+
+// escapes the way serde_json does, without the `Value` it needs to write a string
+fn write_json_string(formatter: &mut fmt::Formatter<'_>, text: &str) -> fmt::Result {
+    formatter.write_char('"')?;
+    for character in text.chars() {
+        match character {
+            '"' => formatter.write_str("\\\"")?,
+            '\\' => formatter.write_str("\\\\")?,
+            '\u{8}' => formatter.write_str("\\b")?,
+            '\u{c}' => formatter.write_str("\\f")?,
+            '\n' => formatter.write_str("\\n")?,
+            '\r' => formatter.write_str("\\r")?,
+            '\t' => formatter.write_str("\\t")?,
+            control if control < ' ' => write!(formatter, "\\u{:04x}", u32::from(control))?,
+            character => formatter.write_char(character)?,
+        }
+    }
+    formatter.write_char('"')
 }
 
 // each level borrows its parent, so nothing is allocated until an error needs the full path
@@ -79,14 +150,14 @@ pub(crate) struct Location<'parent> {
 }
 
 impl<'parent> Location<'parent> {
-    pub(crate) fn root(source: &'parent str) -> Self {
+    pub(crate) fn root(source: &'static str) -> Self {
         Self {
             parent: None,
-            item: LocationItem::Key(source),
+            item: LocationItem::Source(source),
         }
     }
 
-    pub(crate) fn key<'child>(&'child self, key: &'child str) -> Location<'child> {
+    pub(crate) fn key<'child>(&'child self, key: &'child Arc<str>) -> Location<'child> {
         Location {
             parent: Some(self),
             item: LocationItem::Key(key),
@@ -100,39 +171,52 @@ impl<'parent> Location<'parent> {
         }
     }
 
-    fn to_json(&self) -> Value {
-        let mut items = Vec::new();
-        let mut current = Some(self);
-        while let Some(location) = current {
-            items.push(match location.item {
-                LocationItem::Key(key) => Value::from(key),
-                LocationItem::Index(index) => Value::from(index),
-            });
-            current = location.parent;
-        }
-        items.reverse();
-        Value::Array(items)
+    fn ancestors(&self) -> impl Iterator<Item = &Location<'parent>> {
+        std::iter::successors(Some(self), |location| location.parent)
+    }
+
+    fn to_segments(&self) -> Vec<Segment> {
+        let mut segments = Vec::with_capacity(self.ancestors().count());
+        segments.extend(self.ancestors().map(|location| match location.item {
+            LocationItem::Source(source) => Segment::Source(source),
+            LocationItem::Key(key) => Segment::Key(Arc::clone(key)),
+            LocationItem::Index(index) => Segment::Index(index),
+        }));
+        segments.reverse();
+        segments
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ValidationError {
     kind: ErrorKind,
-    location: Value,
+    location: Vec<Segment>,
     input: Value,
     context: Option<Value>,
 }
 
 impl ValidationError {
     pub(crate) fn new(kind: ErrorKind, location: &Location<'_>, input: Value) -> Self {
-        Self::at(kind, location.to_json(), input)
-    }
-
-    // takes `loc` already as JSON, so tests can write it the way it appears in the response
-    pub(crate) fn at(kind: ErrorKind, location: Value, input: Value) -> Self {
         Self {
             kind,
-            location,
+            location: location.to_segments(),
+            input,
+            context: None,
+        }
+    }
+
+    // takes `loc` as JSON, so tests can write it the way it appears in the response
+    #[cfg(test)]
+    #[allow(clippy::expect_used)] // only given literal locations
+    pub(crate) fn at(kind: ErrorKind, location: Value, input: Value) -> Self {
+        let segment = |item: Value| match item {
+            Value::String(key) => Segment::Key(Arc::from(key)),
+            index => Segment::Index(serde_json::from_value(index).expect("a key or an index")),
+        };
+        let items: Vec<Value> = serde_json::from_value(location).expect("a JSON array");
+        Self {
+            kind,
+            location: items.into_iter().map(segment).collect(),
             input,
             context: None,
         }
@@ -145,9 +229,10 @@ impl ValidationError {
 
     fn to_json(&self) -> Value {
         let (kind, message) = self.kind.type_and_message();
+        let location: Vec<Value> = self.location.iter().map(Segment::to_json).collect();
         let mut error = json!({
             "type": kind,
-            "loc": self.location,
+            "loc": location,
             "msg": message,
             "input": self.input,
         });
@@ -162,11 +247,14 @@ impl ValidationError {
 impl fmt::Display for ValidationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (kind, message) = self.kind.type_and_message();
-        write!(
-            formatter,
-            r#"{{"type":"{kind}","loc":{},"msg":"{message}","input":{}"#,
-            self.location, self.input
-        )?;
+        write!(formatter, r#"{{"type":"{kind}","loc":["#)?;
+        for (index, segment) in self.location.iter().enumerate() {
+            if index > 0 {
+                formatter.write_str(",")?;
+            }
+            write!(formatter, "{segment}")?;
+        }
+        write!(formatter, r#"],"msg":"{message}","input":{}"#, self.input)?;
         if let Some(context) = &self.context {
             write!(formatter, r#","ctx":{context}"#)?;
         }
@@ -261,6 +349,8 @@ pub(crate) fn validation_failed(errors: Vec<ValidationError>) -> Response {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
     use crate::response::response_error;
 
@@ -337,13 +427,33 @@ mod tests {
     #[test]
     fn builds_locations_from_the_root_down() {
         let body = Location::root("body");
-        let tags = body.key("tags");
+        let tags_name = Arc::from("tags");
+        let tags = body.key(&tags_name);
 
         let error = ValidationError::new(ErrorKind::StringType, &tags.index(1), json!(5));
 
         assert_eq!(
             error,
             ValidationError::at(ErrorKind::StringType, json!(["body", "tags", 1]), json!(5))
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn writes_keys_the_way_serde_json_does(key in any::<String>()) {
+            let segment = Segment::Key(Arc::from(key.as_str()));
+
+            prop_assert_eq!(segment.to_string(), Value::from(key).to_string());
+        }
+    }
+
+    #[test]
+    fn writes_the_short_escapes_the_way_serde_json_does() {
+        let key = "\"\\\u{8}\u{c}\n\r\t\u{1}/\u{e9}";
+
+        assert_eq!(
+            Segment::Key(Arc::from(key)).to_string(),
+            Value::from(key).to_string()
         );
     }
 
