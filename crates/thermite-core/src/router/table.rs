@@ -77,10 +77,10 @@ impl Node {
     }
 }
 
-pub(crate) enum Lookup<'table, T> {
+pub(crate) enum Lookup<'table, 'path, T> {
     Found {
         value: &'table T,
-        parameters: PathParameters<'table>,
+        parameters: PathParameters<'table, 'path>,
     },
     MethodNotAllowed {
         allowed: Vec<Method>,
@@ -138,7 +138,7 @@ impl<T> RouteTable<T> {
             .map(|entry| (&entry.method, &entry.pattern, &entry.value))
     }
 
-    pub(crate) fn lookup(&self, method: &Method, path: &str) -> Lookup<'_, T> {
+    pub(crate) fn lookup<'path>(&self, method: &Method, path: &'path str) -> Lookup<'_, 'path, T> {
         let segments = path::decoded_segments(path);
 
         let found = self.root.find(&segments, &mut |indices| {

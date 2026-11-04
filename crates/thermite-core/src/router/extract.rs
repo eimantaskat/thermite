@@ -16,7 +16,7 @@ use crate::validation::{ErrorKind, Location, ValidationError, collect_all};
 
 pub(super) fn extract_arguments(
     inputs: &Inputs,
-    path_parameters: &PathParameters<'_>,
+    path_parameters: &PathParameters<'_, '_>,
     request: &Request,
 ) -> Result<Arguments, Vec<ValidationError>> {
     // like FastAPI, a body that is not JSON fails on its own, before any parameter is checked

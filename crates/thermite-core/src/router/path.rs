@@ -5,29 +5,29 @@ use crate::parse::percent_decode;
 use crate::route_error::RouteError;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct PathParameters<'pattern>(Vec<(&'pattern str, String)>);
+pub(crate) struct PathParameters<'pattern, 'path>(Vec<(&'pattern str, Cow<'path, str>)>);
 
-impl PathParameters<'_> {
+impl PathParameters<'_, '_> {
     pub(crate) fn get(&self, name: &str) -> Option<&str> {
         self.0
             .iter()
             .find(|(parameter, _)| *parameter == name)
-            .map(|(_, value)| value.as_str())
+            .map(|(_, value)| value.as_ref())
     }
 
     #[cfg(test)]
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.0.iter().map(|(name, value)| (*name, value.as_str()))
+        self.0.iter().map(|(name, value)| (*name, value.as_ref()))
     }
 
     #[cfg(test)]
     pub(crate) fn from_pairs<'pattern>(
         pairs: impl IntoIterator<Item = (&'pattern str, &'pattern str)>,
-    ) -> PathParameters<'pattern> {
+    ) -> PathParameters<'pattern, 'pattern> {
         PathParameters(
             pairs
                 .into_iter()
-                .map(|(name, value)| (name, value.to_owned()))
+                .map(|(name, value)| (name, Cow::Borrowed(value)))
                 .collect(),
         )
     }
@@ -123,15 +123,16 @@ impl PathPattern {
         &self.segments
     }
 
-    pub(crate) fn parameters(&self, segments: &[Cow<'_, str>]) -> PathParameters<'_> {
+    pub(crate) fn parameters<'path>(
+        &self,
+        segments: &[Cow<'path, str>],
+    ) -> PathParameters<'_, 'path> {
         PathParameters(
             self.segments
                 .iter()
                 .zip(segments)
                 .filter_map(|(pattern, value)| {
-                    pattern
-                        .parameter_name()
-                        .map(|name| (name, value.to_string()))
+                    pattern.parameter_name().map(|name| (name, value.clone()))
                 })
                 .collect(),
         )
