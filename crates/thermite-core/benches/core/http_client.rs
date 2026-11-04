@@ -22,8 +22,9 @@ pub async fn handshake(stream: TcpStream) -> SendRequest<Full<Bytes>> {
     let (sender, connection) = http1::handshake(TokioIo::new(stream))
         .await
         .expect("an HTTP/1.1 connection");
+    // without a shutdown, which closes gracefully and would leave the port in TIME_WAIT despite a zero linger
     tokio::spawn(async move {
-        let _ = connection.await;
+        let _ = connection.without_shutdown().await;
     });
     sender
 }

@@ -93,16 +93,21 @@ async fn send_on_new_connection(address: SocketAddr) -> StatusCode {
     .await
 }
 
-async fn send_too_large(address: SocketAddr) -> String {
+fn upload_head(content_length: usize, connection: &str) -> String {
+    format!(
+        "POST /upload HTTP/1.1\r\nhost: localhost\r\nconnection: {connection}\r\ncontent-length: {content_length}\r\n\r\n"
+    )
+}
+
+// sent on a connection of its own, which the server closes after answering
+async fn send_head(address: SocketAddr, head: &str) -> String {
     let mut stream = open_stream(address).await;
     close_at_once(&stream);
-    let head =
-        format!("POST /upload HTTP/1.1\r\nhost: localhost\r\ncontent-length: {TOO_LARGE}\r\n\r\n");
     stream
         .write_all(head.as_bytes())
         .await
         .expect("the request head");
-    stream.shutdown().await.expect("the write half closed");
+    // no shutdown of the write half, which would close gracefully and leave the client's port in TIME_WAIT
     let mut response = Vec::new();
     stream
         .read_to_end(&mut response)
@@ -116,6 +121,9 @@ fn http(criterion: &mut Criterion) {
     let address = start(&runtime);
     let empty = Bytes::new();
     let upload = Bytes::from(vec![b'a'; MEBIBYTE]);
+    // the same exchange answered with a 200, so the two differ only in what the server does
+    let closing = upload_head(0, "close");
+    let too_large = upload_head(TOO_LARGE, "keep-alive");
     runtime.block_on(async {
         let mut sender = connect(address).await;
         assert_eq!(
@@ -127,7 +135,9 @@ fn http(criterion: &mut Criterion) {
             StatusCode::OK
         );
         assert_eq!(send_on_new_connection(address).await, StatusCode::OK);
-        let refused = send_too_large(address).await;
+        let answered = send_head(address, &closing).await;
+        assert!(answered.starts_with("HTTP/1.1 200"), "{answered}");
+        let refused = send_head(address, &too_large).await;
         assert!(refused.starts_with("HTTP/1.1 413"), "{refused}");
     });
 
@@ -150,8 +160,15 @@ fn http(criterion: &mut Criterion) {
             .to_async(&runtime)
             .iter(|| send_on_new_connection(address));
     });
+    group.bench_function("post/connection_close", |bencher| {
+        bencher
+            .to_async(&runtime)
+            .iter(|| send_head(address, &closing));
+    });
     group.bench_function("body_too_large", |bencher| {
-        bencher.to_async(&runtime).iter(|| send_too_large(address));
+        bencher
+            .to_async(&runtime)
+            .iter(|| send_head(address, &too_large));
     });
     group.throughput(Throughput::Bytes(MEBIBYTE as u64));
     group.bench_function("body/1_mib", |bencher| {
