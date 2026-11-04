@@ -5,9 +5,9 @@ use thermite_core::{Arguments, Request, RouteDescription, WebSocketDisconnect};
 
 use super::WebSocket;
 use crate::arity::for_each_arity;
-use crate::dependency::DependencyCache;
 use crate::extract::FromRequest;
-use crate::state::RequiredState;
+use crate::handler::set_up;
+use crate::requirements::{RequestScope, Requirements};
 
 // a disconnect that ends the handler through `?` is how a WebSocket usually ends, as in Starlette
 pub trait WebSocketOutput {}
@@ -24,7 +24,7 @@ impl WebSocketOutput for Result<(), WebSocketDisconnect> {}
 pub trait WebSocketHandler<Extractors>: Send + Sync + 'static {
     fn describe(&self, description: RouteDescription) -> RouteDescription;
 
-    fn require_state(required: &mut RequiredState);
+    fn require(requirements: &mut Requirements);
 
     fn call(
         &self,
@@ -46,19 +46,18 @@ macro_rules! impl_websocket_handler {
                 <($($extractor,)*) as FromRequest>::describe(description)
             }
 
-            fn require_state(required: &mut RequiredState) {
-                <($($extractor,)*) as FromRequest>::require_state(required);
+            fn require(requirements: &mut Requirements) {
+                <($($extractor,)*) as FromRequest>::require(requirements);
             }
 
             // each value is named after its type parameter
             #[allow(non_snake_case)]
             fn call(
                 &self,
-                mut request: Request,
+                request: Request,
                 arguments: Arguments,
                 socket: thermite_core::WebSocket,
             ) -> impl Future<Output = ()> + Send {
-                request.extensions_mut().insert(DependencyCache::default());
                 async move {
                     match <($($extractor,)*) as FromRequest>::from_request(&request, &arguments).await {
                         Ok(($($extractor,)*)) => {
@@ -78,13 +77,15 @@ for_each_arity!(impl_websocket_handler);
 // a blanket core WebSocketHandler impl over every WebSocketHandler<Extractors> would leave Extractors unconstrained
 pub(crate) struct WebSocketEndpoint<Function, Extractors> {
     handler: Function,
+    scope: RequestScope,
     extractors: PhantomData<fn() -> Extractors>,
 }
 
 impl<Function, Extractors> WebSocketEndpoint<Function, Extractors> {
-    pub(crate) fn new(handler: Function) -> Self {
+    pub(crate) fn new(handler: Function, scope: RequestScope) -> Self {
         Self {
             handler,
+            scope,
             extractors: PhantomData,
         }
     }
@@ -98,10 +99,11 @@ where
 {
     fn call(
         &self,
-        request: Request,
+        mut request: Request,
         arguments: Arguments,
         socket: thermite_core::WebSocket,
     ) -> impl Future<Output = ()> + Send {
+        set_up(self.scope, &mut request);
         self.handler.call(request, arguments, socket)
     }
 }

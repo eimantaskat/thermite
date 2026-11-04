@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use serde::Deserialize;
 use thermite::{
     App, Arguments, BackgroundTasks, Dependency, Depends, Error, FromRequest, HttpError, Model,
-    Path, Request, State, StatusCode, TestClient,
+    Path, Request, Requirements, Response, State, StatusCode, TestClient,
 };
 
 use crate::support::TestResult;
@@ -94,6 +94,28 @@ impl FromRequest for Unauthorized {
 
 async fn rejected(_: Depends<Audit>, _: Unauthorized) {}
 
+// reaches the tasks through extractors of the framework, so it forwards what they require
+struct Audited;
+
+impl FromRequest for Audited {
+    type Rejection = Response;
+
+    fn require(requirements: &mut Requirements) {
+        <(State<Log>, BackgroundTasks)>::require(requirements);
+    }
+
+    async fn from_request(request: &Request, arguments: &Arguments) -> Result<Self, Response> {
+        let (State(log), tasks) =
+            <(State<Log>, BackgroundTasks)>::from_request(request, arguments).await?;
+        tasks.add(async move { log.record("audited task") });
+        Ok(Self)
+    }
+}
+
+async fn audited(_: Audited) -> &'static str {
+    "audited"
+}
+
 async fn items(log: &Log) -> Result<TestClient, Box<dyn std::error::Error>> {
     let app = App::new()
         .state(log.clone())
@@ -101,7 +123,8 @@ async fn items(log: &Log) -> Result<TestClient, Box<dyn std::error::Error>> {
         .get("/missing", missing)?
         .get("/refused", refused)?
         .get("/failed", failed)?
-        .get("/rejected", rejected)?;
+        .get("/rejected", rejected)?
+        .get("/audited", audited)?;
     Ok(TestClient::start(app).await?)
 }
 
@@ -159,5 +182,19 @@ async fn runs_no_tasks_when_an_extractor_rejects_the_request() -> TestResult {
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(log.recorded(), ["audit resolved"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn runs_the_tasks_of_an_extractor_of_the_users_own_that_forwards_what_it_requires()
+-> TestResult {
+    let log = Log::default();
+    let client = items(&log).await?;
+
+    let response = client.get("/audited").send().await?;
+    client.stop().await;
+
+    assert_eq!(response.text()?, "audited");
+    assert_eq!(log.recorded(), ["audited task"]);
     Ok(())
 }

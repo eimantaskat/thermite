@@ -15,8 +15,8 @@ use crate::arity::for_each_arity;
 use crate::dependency::DependencyCache;
 use crate::extract::FromRequest;
 use crate::model::ToSchema;
+use crate::requirements::{RequestScope, Requirements};
 use crate::response::{IntoResponse, describe_responses};
-use crate::state::RequiredState;
 
 // `Extractors` is the tuple of argument types, so one function type can only match one impl
 #[diagnostic::on_unimplemented(
@@ -28,7 +28,7 @@ use crate::state::RequiredState;
 pub trait Handler<Extractors>: Send + Sync + 'static {
     fn describe(&self, description: RouteDescription) -> RouteDescription;
 
-    fn require_state(required: &mut RequiredState);
+    fn require(requirements: &mut Requirements);
 
     fn call(&self, request: Request, arguments: Arguments)
     -> impl Future<Output = Response> + Send;
@@ -76,27 +76,26 @@ macro_rules! impl_handler {
                 <($($extractor,)*) as FromRequest>::describe(description)
             }
 
-            fn require_state(required: &mut RequiredState) {
-                <($($extractor,)*) as FromRequest>::require_state(required);
+            fn require(requirements: &mut Requirements) {
+                <($($extractor,)*) as FromRequest>::require(requirements);
             }
 
             // each value is named after its type parameter
             #[allow(non_snake_case)]
             fn call(
                 &self,
-                mut request: Request,
+                request: Request,
                 arguments: Arguments,
             ) -> impl Future<Output = Response> + Send {
-                let tasks = BackgroundTasks::new();
-                request.extensions_mut().insert(DependencyCache::default());
-                request.extensions_mut().insert(tasks.clone());
                 async move {
                     match <($($extractor,)*) as FromRequest>::from_request(&request, &arguments).await {
                         Ok(($($extractor,)*)) => {
                             let mut response = self($($extractor),*).await.into_response();
                             // FastAPI drops the tasks of a handler that raised
-                            if response_error(&response).is_none() {
-                                attach_background_tasks(&mut response, tasks);
+                            if response_error(&response).is_none()
+                                && let Some(tasks) = request.extensions().get::<BackgroundTasks>()
+                            {
+                                attach_background_tasks(&mut response, tasks.clone());
                             }
                             response
                         }
@@ -130,14 +129,16 @@ pub(crate) fn handler_name<Function>() -> Option<&'static str> {
 // a blanket RouteHandler impl over every Handler<Extractors> would leave Extractors unconstrained
 pub(crate) struct HandlerEndpoint<Function, Extractors> {
     handler: Function,
+    scope: RequestScope,
     // `fn() -> Extractors` keeps the endpoint Send and Sync whatever the extractor types are
     extractors: PhantomData<fn() -> Extractors>,
 }
 
 impl<Function, Extractors> HandlerEndpoint<Function, Extractors> {
-    pub(crate) fn new(handler: Function) -> Self {
+    pub(crate) fn new(handler: Function, scope: RequestScope) -> Self {
         Self {
             handler,
+            scope,
             extractors: PhantomData,
         }
     }
@@ -150,16 +151,28 @@ where
 {
     fn call(
         &self,
-        request: Request,
+        mut request: Request,
         arguments: Arguments,
     ) -> impl Future<Output = Response> + Send {
+        set_up(self.scope, &mut request);
         self.handler.call(request, arguments)
+    }
+}
+
+// the extractors that use these share one per request, so a dependency resolves once and every task added runs
+pub(crate) fn set_up(scope: RequestScope, request: &mut Request) {
+    if scope.dependency_cache {
+        request.extensions_mut().insert(DependencyCache::default());
+    }
+    if scope.background_tasks {
+        request.extensions_mut().insert(BackgroundTasks::new());
     }
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use std::convert::Infallible;
     use std::future::ready;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -169,6 +182,7 @@ mod tests {
     use thermite_core::{Parameter, ResponseDescription, Schema};
 
     use super::*;
+    use crate::dependency::{Dependency, Depends};
     use crate::json::Json;
     use crate::response::SUCCESSFUL_RESPONSE;
 
@@ -264,8 +278,46 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct Audit;
+
+    impl Dependency for Audit {
+        type Needs = BackgroundTasks;
+        type Rejection = Infallible;
+
+        fn resolve(_: BackgroundTasks) -> impl Future<Output = Result<Self, Infallible>> + Send {
+            ready(Ok(Self))
+        }
+    }
+
     fn describe<Function: Handler<Extractors>, Extractors>(handler: &Function) -> RouteDescription {
         handler.describe(RouteDescription::new(Method::GET, "/items"))
+    }
+
+    fn request_scope<Function: Handler<Extractors>, Extractors>(_: &Function) -> RequestScope {
+        let mut requirements = Requirements::default();
+        Function::require(&mut requirements);
+        requirements.request_scope()
+    }
+
+    #[test]
+    fn sets_up_nothing_per_request_for_extractors_that_share_nothing() {
+        let scope = request_scope(&|_: Offset, _: Limit| async { Response::default() });
+
+        assert_eq!(scope, RequestScope::default());
+    }
+
+    #[test]
+    fn sets_up_what_a_dependency_and_what_it_needs_share() {
+        let scope = request_scope(&|_: Offset, _: Depends<Audit>| async { Response::default() });
+
+        assert_eq!(
+            scope,
+            RequestScope {
+                dependency_cache: true,
+                background_tasks: true,
+            }
+        );
     }
 
     #[test]

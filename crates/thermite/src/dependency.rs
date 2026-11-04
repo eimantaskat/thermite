@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use thermite_core::{Arguments, Request, Response, RouteDescription};
 
 use crate::extract::{FromRequest, describe_extractor};
+use crate::requirements::Requirements;
 use crate::response::{IntoResponse, describe_responses};
-use crate::state::RequiredState;
 
 pub trait Dependency: Clone + Send + 'static {
     type Needs: FromRequest;
@@ -28,8 +28,9 @@ impl<T: Dependency> FromRequest for Depends<T> {
         })
     }
 
-    fn require_state(required: &mut RequiredState) {
-        T::Needs::require_state(required);
+    fn require(requirements: &mut Requirements) {
+        requirements.cache_dependencies();
+        T::Needs::require(requirements);
     }
 
     async fn from_request(request: &Request, arguments: &Arguments) -> Result<Self, Response> {
@@ -60,7 +61,7 @@ impl<T: Dependency> FromRequest for Depends<T> {
 
 type Slot<T> = Arc<tokio::sync::Mutex<Option<T>>>;
 
-// a handler puts one in each request, so a dependency runs once however many extractors need it
+// a route using Depends puts one in each request, so a dependency runs once however many extractors need it
 #[derive(Clone, Default)]
 pub(crate) struct DependencyCache(Arc<Mutex<HashMap<TypeId, Box<dyn Any + Send>>>>);
 

@@ -3,7 +3,7 @@ use std::future::Future;
 use thermite_core::{Arguments, Request, Response, ResponseDescription, RouteDescription};
 
 use super::Handler;
-use crate::state::RequiredState;
+use crate::requirements::Requirements;
 
 #[derive(Debug, Clone)]
 pub struct WithResponse<Function> {
@@ -30,8 +30,8 @@ where
             .response(self.response.clone())
     }
 
-    fn require_state(required: &mut RequiredState) {
-        Function::require_state(required);
+    fn require(requirements: &mut Requirements) {
+        Function::require(requirements);
     }
 
     fn call(

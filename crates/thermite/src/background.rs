@@ -4,10 +4,15 @@ use std::future::{Future, ready};
 use thermite_core::{Arguments, BackgroundTasks, Request};
 
 use crate::extract::FromRequest;
+use crate::requirements::Requirements;
 
-// the handler puts one list in each request, so its dependencies add to the same tasks
+// a route taking them puts one list in each request, so its dependencies add to the same tasks
 impl FromRequest for BackgroundTasks {
     type Rejection = Infallible;
+
+    fn require(requirements: &mut Requirements) {
+        requirements.collect_background_tasks();
+    }
 
     fn from_request(
         request: &Request,

@@ -9,8 +9,9 @@ use std::sync::Arc;
 use thermite_core::Request;
 use tokio::sync::OnceCell;
 
+use crate::requirements::{Requirements, StateType};
 use crate::resource::Resource;
-use crate::state::{FromState, RequiredState, StateMap, StateType};
+use crate::state::{FromState, StateMap};
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -43,7 +44,7 @@ type BoxedFuture<'a, Output> = Pin<Box<dyn Future<Output = Output> + Send + 'a>>
 pub(crate) struct Lifespan {
     states: StateMap,
     resources: Vec<Box<dyn Start>>,
-    required: Vec<(String, RequiredState)>,
+    requirements: Vec<(String, Requirements)>,
     running: OnceCell<Running>,
 }
 
@@ -61,8 +62,8 @@ impl Lifespan {
         self.resources.push(Box::new(Starter::<T>(PhantomData)));
     }
 
-    pub(crate) fn require(&mut self, needed_by: String, required: RequiredState) {
-        self.required.push((needed_by, required));
+    pub(crate) fn require(&mut self, needed_by: String, requirements: Requirements) {
+        self.requirements.push((needed_by, requirements));
     }
 
     pub(crate) async fn startup(&self) -> Result<(), StartupError> {
@@ -113,15 +114,15 @@ impl Lifespan {
                     resource: resource.name(),
                 });
             }
-            let mut required = RequiredState::default();
-            resource.require_state(&mut required);
+            let mut requirements = Requirements::default();
+            resource.require(&mut requirements);
             let started_before = |id| {
                 self.states.contains(id)
                     || self
                         .resource_starting(id)
                         .is_some_and(|other| other < position)
             };
-            if let Some(state) = required.first_missing(started_before) {
+            if let Some(state) = requirements.first_missing_state(started_before) {
                 return Err(if state.id == resource.id() {
                     StartupError::NeedsItself {
                         resource: resource.name(),
@@ -136,8 +137,8 @@ impl Lifespan {
                 });
             }
         }
-        for (needed_by, required) in &self.required {
-            if let Some(state) = required.first_missing(added) {
+        for (needed_by, requirements) in &self.requirements {
+            if let Some(state) = requirements.first_missing_state(added) {
                 return Err(missing(state, needed_by.clone()));
             }
         }
@@ -188,7 +189,7 @@ trait Start: Send + Sync {
 
     fn name(&self) -> &'static str;
 
-    fn require_state(&self, required: &mut RequiredState);
+    fn require(&self, requirements: &mut Requirements);
 
     fn start<'a>(
         &self,
@@ -211,8 +212,8 @@ impl<T: Resource> Start for Starter<T> {
         type_name::<T>()
     }
 
-    fn require_state(&self, required: &mut RequiredState) {
-        T::Needs::require_state(required);
+    fn require(&self, requirements: &mut Requirements) {
+        T::Needs::require(requirements);
     }
 
     fn start<'a>(

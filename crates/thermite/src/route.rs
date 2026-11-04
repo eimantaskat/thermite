@@ -5,7 +5,7 @@ use thermite_core::{RouteDescription, RouteError};
 
 use crate::handler::{Handler, HandlerEndpoint};
 use crate::lifespan::Lifespan;
-use crate::state::RequiredState;
+use crate::requirements::Requirements;
 use crate::websocket::{WebSocketEndpoint, WebSocketHandler};
 
 type AddRoute = Box<
@@ -19,7 +19,7 @@ pub struct Route {
     description: RouteDescription,
     // outermost router's first, as in FastAPI
     tags: Vec<String>,
-    required: RequiredState,
+    requirements: Requirements,
     add: AddRoute,
 }
 
@@ -39,15 +39,19 @@ impl Route {
         Function: Handler<Extractors>,
         Extractors: 'static,
     {
-        let mut required = RequiredState::default();
-        <Function as Handler<Extractors>>::require_state(&mut required);
+        let mut requirements = Requirements::default();
+        <Function as Handler<Extractors>>::require(&mut requirements);
+        let scope = requirements.request_scope();
         Self {
             kind: Kind::Http,
             description: handler.describe(RouteDescription::new(method, path)),
             tags: Vec::new(),
-            required,
+            requirements,
             add: Box::new(move |router, description| {
-                router.route(description, HandlerEndpoint::<_, Extractors>::new(handler))
+                router.route(
+                    description,
+                    HandlerEndpoint::<_, Extractors>::new(handler, scope),
+                )
             }),
         }
     }
@@ -58,17 +62,18 @@ impl Route {
         Function: WebSocketHandler<Extractors>,
         Extractors: 'static,
     {
-        let mut required = RequiredState::default();
-        <Function as WebSocketHandler<Extractors>>::require_state(&mut required);
+        let mut requirements = Requirements::default();
+        <Function as WebSocketHandler<Extractors>>::require(&mut requirements);
+        let scope = requirements.request_scope();
         Self {
             kind: Kind::WebSocket,
             description: handler.describe(RouteDescription::new(Method::GET, path)),
             tags: Vec::new(),
-            required,
+            requirements,
             add: Box::new(move |router, description| {
                 router.websocket(
                     description,
-                    WebSocketEndpoint::<_, Extractors>::new(handler),
+                    WebSocketEndpoint::<_, Extractors>::new(handler, scope),
                 )
             }),
         }
@@ -91,7 +96,7 @@ impl Route {
             .fold(self.description, RouteDescription::with_tag);
         let needed_by = shown(self.kind, &description);
         (self.add)(router, description)?;
-        lifespan.require(needed_by, self.required);
+        lifespan.require(needed_by, self.requirements);
         Ok(())
     }
 }

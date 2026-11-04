@@ -9,6 +9,7 @@ use thermite_core::{Arguments, Request};
 
 use crate::arity::for_each_arity;
 use crate::extract::FromRequest;
+use crate::requirements::Requirements;
 
 #[derive(Debug)]
 pub struct State<T>(pub Arc<T>);
@@ -23,8 +24,8 @@ impl<T> Clone for State<T> {
 impl<T: Send + Sync + 'static> FromRequest for State<T> {
     type Rejection = StatusCode;
 
-    fn require_state(required: &mut RequiredState) {
-        required.add::<T>();
+    fn require(requirements: &mut Requirements) {
+        requirements.add_state::<T>();
     }
 
     fn from_request(
@@ -40,29 +41,6 @@ impl<T: Send + Sync + 'static> FromRequest for State<T> {
             tracing::error!(state = type_name::<T>(), "state is missing");
             StatusCode::INTERNAL_SERVER_ERROR
         }))
-    }
-}
-
-// the state types something reads, so the app can check them all before it starts
-#[derive(Debug, Default)]
-pub struct RequiredState(Vec<StateType>);
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct StateType {
-    pub(crate) id: TypeId,
-    pub(crate) name: &'static str,
-}
-
-impl RequiredState {
-    fn add<T: 'static>(&mut self) {
-        self.0.push(StateType {
-            id: TypeId::of::<T>(),
-            name: type_name::<T>(),
-        });
-    }
-
-    pub(crate) fn first_missing(&self, available: impl Fn(TypeId) -> bool) -> Option<StateType> {
-        self.0.iter().copied().find(|state| !available(state.id))
     }
 }
 
@@ -95,15 +73,15 @@ impl fmt::Debug for StateMap {
 
 // what a resource needs to start: State<T> or a tuple of them
 pub trait FromState: Sized + Send + 'static {
-    fn require_state(required: &mut RequiredState);
+    fn require(requirements: &mut Requirements);
 
     // the error is the name of the first state type missing
     fn from_state(states: &StateMap) -> Result<Self, &'static str>;
 }
 
 impl<T: Send + Sync + 'static> FromState for State<T> {
-    fn require_state(required: &mut RequiredState) {
-        required.add::<T>();
+    fn require(requirements: &mut Requirements) {
+        requirements.add_state::<T>();
     }
 
     fn from_state(states: &StateMap) -> Result<Self, &'static str> {
@@ -116,8 +94,8 @@ macro_rules! impl_from_state_for_tuple {
         impl<$($state: FromState),*> FromState for ($($state,)*) {
             // the empty tuple needs nothing
             #[allow(unused_variables)]
-            fn require_state(required: &mut RequiredState) {
-                $($state::require_state(required);)*
+            fn require(requirements: &mut Requirements) {
+                $($state::require(requirements);)*
             }
 
             // the empty tuple needs nothing, so it reads no state
@@ -182,10 +160,10 @@ mod tests {
     fn names_the_first_state_that_is_missing() {
         let mut states = StateMap::default();
         states.insert(Arc::new(Settings("thermite")));
-        let mut required = RequiredState::default();
-        <(State<Settings>, State<u8>, State<u16>) as FromState>::require_state(&mut required);
+        let mut requirements = Requirements::default();
+        <(State<Settings>, State<u8>, State<u16>) as FromState>::require(&mut requirements);
 
-        let declared = required.first_missing(|id| states.contains(id));
+        let declared = requirements.first_missing_state(|id| states.contains(id));
         let read = <(State<Settings>, State<u8>, State<u16>)>::from_state(&states).err();
 
         assert_eq!(declared.map(|state| state.name), Some(type_name::<u8>()));

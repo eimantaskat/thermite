@@ -5,8 +5,8 @@ use std::future::Future;
 
 use thermite_core::{Arguments, Request, RouteDescription};
 
+use crate::requirements::Requirements;
 use crate::response::{IntoResponse, describe_responses};
-use crate::state::RequiredState;
 
 pub use parameters::{Cookie, Header, Path, Query};
 
@@ -19,8 +19,8 @@ pub trait FromRequest: Sized + Send {
         description
     }
 
-    // the app checks when it starts that every state type named here was added
-    fn require_state(_: &mut RequiredState) {}
+    // gathered when the route is added: the state the app checks for when it starts, and what each request sets up
+    fn require(_: &mut Requirements) {}
 
     fn from_request(
         request: &Request,

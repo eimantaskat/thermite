@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use serde::Deserialize;
 use thermite::{
     App, Arguments, Dependency, Depends, FromRequest, Header, Json, Model, Path, Query, Request,
-    Response, StatusCode,
+    Requirements, Response, StatusCode,
 };
 
 use crate::support::{RunningServer, TestResult};
@@ -286,6 +286,10 @@ struct BothAtOnce;
 
 impl FromRequest for BothAtOnce {
     type Rejection = Response;
+
+    fn require(requirements: &mut Requirements) {
+        Depends::<Slow>::require(requirements);
+    }
 
     async fn from_request(request: &Request, arguments: &Arguments) -> Result<Self, Response> {
         let (first, second) = tokio::join!(

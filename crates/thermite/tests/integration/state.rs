@@ -9,7 +9,7 @@ use std::io;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use thermite::{
-    App, Arguments, Dependency, Depends, FromRequest, IntoResponse, Request, RequiredState,
+    App, Arguments, Dependency, Depends, FromRequest, IntoResponse, Request, Requirements,
     Resource, Response, Server, ServerError, StartupError, State, StatusCode,
 };
 
@@ -276,8 +276,8 @@ struct Shouted(String);
 impl FromRequest for Shouted {
     type Rejection = Response;
 
-    fn require_state(required: &mut RequiredState) {
-        State::<Settings>::require_state(required);
+    fn require(requirements: &mut Requirements) {
+        State::<Settings>::require(requirements);
     }
 
     async fn from_request(request: &Request, arguments: &Arguments) -> Result<Self, Response> {

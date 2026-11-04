@@ -13,6 +13,7 @@ mod lifespan;
 mod method_routes;
 mod model;
 mod rejection;
+mod requirements;
 mod resource;
 mod response;
 mod route;
@@ -33,12 +34,13 @@ pub use json::Json;
 pub use lifespan::StartupError;
 pub use model::{Model, ToSchema};
 pub use rejection::ModelMismatch;
+pub use requirements::Requirements;
 pub use resource::Resource;
 pub use response::IntoResponse;
 pub use route::Route;
 pub use router::Router;
 pub use security::{NotAuthenticated, SecurityScheme};
-pub use state::{RequiredState, State};
+pub use state::State;
 pub use test_client::{
     TestClient, TestRequest, TestRequestError, TestResponse, TestWebSocket, TestWebSocketError,
     TestWebSocketRequest,
