@@ -1,3 +1,5 @@
+use std::mem;
+
 use serde_json::{Map, Number, Value};
 
 use super::{Field, Kind, Models, Presence, Schema};
@@ -158,16 +160,13 @@ fn boolean(value: &Value) -> Result<Coerced, ErrorKind> {
 }
 
 fn array(items: &Schema, value: Value, location: &Location<'_>, models: &Models<'_>) -> Validated {
-    let Value::Array(elements) = value else {
+    let Value::Array(mut elements) = value else {
         return Err(failure(ErrorKind::ListType, location, value));
     };
-    collect_all(
-        elements
-            .into_iter()
-            .enumerate()
-            .map(|(index, element)| items.validate_within(element, &location.index(index), models)),
-    )
-    .map(Value::Array)
+    validate_in_place(elements.iter_mut().enumerate(), |index, element| {
+        items.validate_within(element, &location.index(index), models)
+    })?;
+    Ok(Value::Array(elements))
 }
 
 fn object(
@@ -179,6 +178,18 @@ fn object(
     let Value::Object(mut members) = value else {
         return Err(failure(ErrorKind::ModelAttributesType, location, value));
     };
+    // clients usually send exactly the declared fields in their order, which then need no new map
+    if members.len() == fields.len()
+        && members
+            .keys()
+            .zip(fields)
+            .all(|(name, field)| *name == field.name)
+    {
+        validate_in_place(fields.iter().zip(members.values_mut()), |field, member| {
+            field.validate_within(Some(member), &location.key(&field.name), None, models)
+        })?;
+        return Ok(Value::Object(members));
+    }
     // fields are moved out below, so keep a copy for the error input only when one is missing
     let original = fields
         .iter()
@@ -199,6 +210,25 @@ fn object(
             .map(|validated| (name, validated))
     }))
     .map(|entries| Value::Object(entries.into_iter().collect::<Map<_, _>>()))
+}
+
+// collect_all for values validated where they are, each one written back over its input
+fn validate_in_place<'value, Context>(
+    slots: impl IntoIterator<Item = (Context, &'value mut Value)>,
+    mut validate: impl FnMut(Context, Value) -> Validated,
+) -> Result<(), Vec<ValidationError>> {
+    let mut errors = Vec::new();
+    for (context, slot) in slots {
+        match validate(context, mem::take(slot)) {
+            Ok(validated) => *slot = validated,
+            Err(mut failures) => errors.append(&mut failures),
+        }
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 #[cfg(test)]
@@ -359,6 +389,35 @@ mod tests {
     }
 
     #[test]
+    fn validates_the_declared_fields_in_their_order_where_they_are() {
+        let item = Schema::object([
+            Field::new("name", Schema::string()),
+            Field::new("quantity", Schema::integer()),
+            Field::new("tax", Schema::number()).optional(),
+        ]);
+
+        assert_eq!(
+            check(
+                &item,
+                json!({"name": "anvil", "quantity": "3", "tax": null})
+            )
+            .map(|value| value.to_string()),
+            Ok(r#"{"name":"anvil","quantity":3,"tax":null}"#.to_owned())
+        );
+        assert_eq!(
+            check(&item, json!({"name": 1, "quantity": "x", "tax": 0.5})),
+            Err(vec![
+                ValidationError::at(ErrorKind::StringType, json!(["body", "name"]), json!(1)),
+                ValidationError::at(
+                    ErrorKind::IntParsing,
+                    json!(["body", "quantity"]),
+                    json!("x")
+                ),
+            ])
+        );
+    }
+
+    #[test]
     fn reports_a_missing_field_with_the_whole_object_as_input() {
         let item = Schema::object([
             Field::new("name", Schema::string()),
@@ -481,6 +540,16 @@ mod tests {
         );
     }
 
+    fn member() -> impl Strategy<Value = Value> {
+        prop_oneof![
+            Just(Value::Null),
+            any::<bool>().prop_map(Value::from),
+            any::<i64>().prop_map(Value::from),
+            any::<i64>().prop_map(|integer| Value::from(integer.to_string())),
+            "[a-z0-9.]{0,4}".prop_map(Value::from),
+        ]
+    }
+
     proptest! {
         #[test]
         fn any_i64_written_as_text_becomes_that_integer(integer in any::<i64>()) {
@@ -490,6 +559,26 @@ mod tests {
         #[test]
         fn any_finite_float_written_as_text_becomes_that_number(float in any::<f64>().prop_filter("finite", |float| float.is_finite())) {
             prop_assert_eq!(check(&Schema::number(), json!(float.to_string())), Ok(json!(float)));
+        }
+
+        // the declared order is validated in place and any other order through a new map
+        #[test]
+        fn the_order_fields_arrive_in_does_not_change_the_outcome(
+            first in member(),
+            second in member(),
+            third in member(),
+        ) {
+            let schema = Schema::object([
+                Field::new("a", Schema::integer()),
+                Field::new("b", Schema::boolean()).optional(),
+                Field::new("c", Schema::array(Schema::number())),
+            ]);
+            let declared = json!({"a": first, "b": second, "c": [third]});
+            let reversed = json!({"c": [third], "b": second, "a": first});
+
+            let in_place = check(&schema, declared).map(|value| value.to_string());
+            let rebuilt = check(&schema, reversed).map(|value| value.to_string());
+            prop_assert_eq!(in_place, rebuilt);
         }
 
         #[test]
