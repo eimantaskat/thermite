@@ -124,6 +124,10 @@ impl Server {
             tokio::select! {
                 accepted = self.listener.accept() => match accepted {
                     Ok((stream, peer_address)) => {
+                        // a second write before a read waits about 40 ms for the delayed ack on Linux
+                        if let Err(error) = stream.set_nodelay(true) {
+                            tracing::debug!(%error, "failed to turn off Nagle's algorithm");
+                        }
                         connections.spawn(serve_connection(
                             &builder,
                             Shutdown::new(stopped.clone()),

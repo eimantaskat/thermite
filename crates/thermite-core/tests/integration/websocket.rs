@@ -1,7 +1,7 @@
 use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::Poll;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
@@ -548,6 +548,41 @@ async fn echoes_over_a_real_connection_and_closes_when_the_client_does() -> Test
 
     assert_eq!(echoed, tungstenite::Message::text("over the wire"));
     assert_eq!(answer, Some(WireCode::Away));
+    server.stop().await
+}
+
+// with Nagle's algorithm on, each second reply waits about 40 ms for Linux's delayed ack
+#[tokio::test]
+async fn a_second_write_before_a_read_is_not_held_back() -> TestResult {
+    let echo_twice = |_: Request, _: Arguments, socket: WebSocket| async move {
+        let Ok(mut connection) = socket.accept().await else {
+            return;
+        };
+        while let Ok(message) = connection.receive().await {
+            for _ in 0..2 {
+                if connection.send(message.clone()).await.is_err() {
+                    return;
+                }
+            }
+        }
+    };
+    let server = RunningServer::start(router(echo_twice)?).await?;
+    let mut socket = open_over_tcp(&server).await?;
+
+    let started = Instant::now();
+    for _ in 0..10 {
+        socket.send(tungstenite::Message::text("twice")).await?;
+        for _ in 0..2 {
+            timeout(TEST_TIMEOUT, socket.next())
+                .await?
+                .ok_or("closed")??;
+        }
+    }
+    let elapsed = started.elapsed();
+    socket.close(None).await?;
+    close_code(&mut socket).await?;
+
+    assert!(elapsed < Duration::from_millis(200), "took {elapsed:?}");
     server.stop().await
 }
 

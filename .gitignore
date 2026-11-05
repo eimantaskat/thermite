@@ -1,3 +1,5 @@
 /target
 lcov.info
 *.profraw
+.venv/
+__pycache__/

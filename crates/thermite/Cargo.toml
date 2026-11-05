@@ -21,12 +21,17 @@ tracing.workspace = true
 criterion.workspace = true
 reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
-tokio = { workspace = true, features = ["macros", "rt", "signal", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 trybuild.workspace = true
 
 [[bench]]
 name = "app"
 harness = false
+
+# kept beside the FastAPI app it is compared with
+[[example]]
+name = "fastapi_comparison"
+path = "../../benchmarks/fastapi_comparison/app.rs"
 
 [lints]
 workspace = true
