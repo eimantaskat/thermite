@@ -1,0 +1,15 @@
+# the axum side of the comparison, outside the thermite workspace so axum never enters its Cargo.lock
+[package]
+name = "axum-comparison"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# its own workspace, or cargo takes it for a missing member of the one above
+[workspace]
+
+[dependencies]
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "query", "tokio"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+tokio = { version = "1.54.1", features = ["net", "rt", "rt-multi-thread", "signal"] }

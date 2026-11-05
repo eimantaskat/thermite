@@ -28,10 +28,10 @@ trybuild.workspace = true
 name = "app"
 harness = false
 
-# kept beside the FastAPI app it is compared with
+# kept beside the FastAPI and axum apps it is compared with
 [[example]]
-name = "fastapi_comparison"
-path = "../../benchmarks/fastapi_comparison/app.rs"
+name = "comparison"
+path = "../../benchmarks/comparison/thermite.rs"
 
 [lints]
 workspace = true

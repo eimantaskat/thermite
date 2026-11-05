@@ -1,13 +1,16 @@
-"""Loads the same app in thermite and in FastAPI with oha and prints a markdown table.
+"""Loads the same app in thermite, axum and FastAPI with oha and prints markdown tables.
 
 Run on Linux, from this directory:
 
-    cargo build --release --example fastapi_comparison
+    cargo build --release --example comparison
+    cargo build --release --manifest-path axum/Cargo.toml
     python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-    python3 run.py --thermite ../../target/release/examples/fastapi_comparison --python .venv/bin/python
+    python3 run.py --thermite ../../target/release/examples/comparison \
+        --axum axum/target/release/axum-comparison --python .venv/bin/python
 
+Any of the three can be left out, as long as two remain; the first given is the one the others are compared with.
 Each server is pinned to its own cores with taskset and oha to others, so that they do not compete.
-Both servers first answer every case once, and the run stops if the answers differ.
+All servers first answer every case once, and the run stops if any answer differs.
 """
 
 import argparse
@@ -57,13 +60,17 @@ class Server:
 
 def servers(arguments, cores, workers):
     pinned = ["taskset", "-c", cores]
-    thermite = [arguments.thermite, f"127.0.0.1:{PORT}", str(workers)]
-    uvicorn = [
-        arguments.python, "-m", "uvicorn", "app:app",
-        "--host", "127.0.0.1", "--port", str(PORT), "--workers", str(workers),
-        "--loop", "uvloop", "--http", "httptools", "--no-access-log", "--log-level", "warning",
-    ]
-    return [Server("thermite", pinned + thermite, workers), Server("FastAPI", pinned + uvicorn, workers)]
+    commands = []
+    for name, binary in (("thermite", arguments.thermite), ("axum", arguments.axum)):
+        if binary:
+            commands.append((name, [binary, f"127.0.0.1:{PORT}", str(workers)]))
+    if arguments.python:
+        commands.append(("FastAPI", [
+            arguments.python, "-m", "uvicorn", "fastapi_app:app",
+            "--host", "127.0.0.1", "--port", str(PORT), "--workers", str(workers),
+            "--loop", "uvloop", "--http", "httptools", "--no-access-log", "--log-level", "warning",
+        ]))
+    return [Server(name, pinned + command, workers) for name, command in commands]
 
 
 def start(server):
@@ -136,44 +143,67 @@ def measure(server, arguments, body_files, expected):
         stop(process)
 
 
-def check_same_answers(pair):
-    answers = []
-    for server in pair:
+def check_same_answers(all_servers):
+    answers = {}
+    for server in all_servers:
         process = start(server)
         try:
-            answers.append({case.name: answer(case) for case in CASES})
+            answers[server.name] = {case.name: answer(case) for case in CASES}
         finally:
             stop(process)
-    thermite, fastapi = answers
-    differences = [name for name in thermite if thermite[name] != fastapi[name]]
-    for name in differences:
-        print(f"{name}:\n  thermite {thermite[name]}\n  FastAPI  {fastapi[name]}", file=sys.stderr)
-    if differences:
+    reference, *others = all_servers
+    expected = answers[reference.name]
+    differs = False
+    for other in others:
+        for case in CASES:
+            if answers[other.name][case.name] != expected[case.name]:
+                differs = True
+                print(
+                    f"{case.name}:\n  {reference.name} {expected[case.name]}\n  {other.name} {answers[other.name][case.name]}",
+                    file=sys.stderr,
+                )
+    if differs:
         sys.exit("the servers answer differently, so they would not be doing the same work")
-    return {name: status for name, (status, _, _) in thermite.items()}
+    return {name: status for name, (status, _, _) in expected.items()}
 
 
 def milliseconds(report, percentile):
     return f"{report['latencyPercentiles'][percentile] * 1000:.2f}"
 
 
-def table(title, results):
-    thermite, fastapi = results["thermite"], results["FastAPI"]
-    lines = [
-        f"### {title}",
+def rate(report):
+    return report["summary"]["requestsPerSec"]
+
+
+def ratio(ours, theirs):
+    # near 1 a single decimal hides differences the runs can tell apart
+    value = ours / theirs
+    return f"{value:.2f}×" if value < 1.5 else f"{value:.1f}×"
+
+
+def tables(title, results):
+    names = list(results)
+    reference, others = names[0], names[1:]
+    throughput = [
+        f"### {title}: requests per second",
         "",
-        "| Case | thermite req/s | FastAPI req/s | Ratio | thermite p50 / p99 ms | FastAPI p50 / p99 ms |",
-        "|---|---:|---:|---:|---:|---:|",
+        "| Case | " + " | ".join(names) + " | " + " | ".join(f"{reference} ÷ {name}" for name in others) + " |",
+        "|---|" + "---:|" * (len(names) + len(others)),
+    ]
+    latency = [
+        f"### {title}: latency p50 / p99 ms",
+        "",
+        "| Case | " + " | ".join(names) + " |",
+        "|---|" + "---:|" * len(names),
     ]
     for case in CASES:
-        ours, theirs = thermite[case.name], fastapi[case.name]
-        ours_rate, theirs_rate = ours["summary"]["requestsPerSec"], theirs["summary"]["requestsPerSec"]
-        lines.append(
-            f"| {case.name} | {ours_rate:,.0f} | {theirs_rate:,.0f} | {ours_rate / theirs_rate:.1f}× "
-            f"| {milliseconds(ours, 'p50')} / {milliseconds(ours, 'p99')} "
-            f"| {milliseconds(theirs, 'p50')} / {milliseconds(theirs, 'p99')} |"
-        )
-    return "\n".join(lines)
+        reports = [results[name][case.name] for name in names]
+        rates = [f"{rate(report):,.0f}" for report in reports]
+        ratios = [ratio(rate(reports[0]), rate(report)) for report in reports[1:]]
+        throughput.append(f"| {case.name} | " + " | ".join(rates + ratios) + " |")
+        latencies = [f"{milliseconds(report, 'p50')} / {milliseconds(report, 'p99')}" for report in reports]
+        latency.append(f"| {case.name} | " + " | ".join(latencies) + " |")
+    return "\n".join(throughput) + "\n\n" + "\n".join(latency)
 
 
 def core_count(cores):
@@ -186,8 +216,9 @@ def core_count(cores):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--thermite", required=True, help="the built fastapi_comparison example")
-    parser.add_argument("--python", required=True, help="a Python with requirements.txt installed")
+    parser.add_argument("--thermite", help="the built comparison example")
+    parser.add_argument("--axum", help="the built axum-comparison binary")
+    parser.add_argument("--python", help="a Python with requirements.txt installed, for FastAPI")
     parser.add_argument("--cores", default="0-3", help="cores for the multi-core run, as taskset takes them")
     parser.add_argument("--load-cores", default="8-15", help="cores for oha")
     parser.add_argument("--connections", type=int, default=64)
@@ -195,6 +226,8 @@ def main():
     parser.add_argument("--warmup", type=int, default=2, help="seconds of load before each measurement")
     parser.add_argument("--output", type=Path, help="a file for oha's raw reports")
     arguments = parser.parse_args()
+    if sum(bool(server) for server in (arguments.thermite, arguments.axum, arguments.python)) < 2:
+        parser.error("give at least two of --thermite, --axum and --python")
 
     first_core = arguments.cores.split(",")[0].split("-")[0]
     runs = [("One core", first_core, 1), (f"{core_count(arguments.cores)} cores", arguments.cores, core_count(arguments.cores))]
@@ -208,16 +241,16 @@ def main():
                 path.write_text(json.dumps(case.body))
                 body_files[case.name] = str(path)
 
-        reports, tables = {}, []
+        reports, printed = {}, []
         for title, cores, workers in runs:
             print(f"{title}:", file=sys.stderr)
             results = {server.name: measure(server, arguments, body_files, expected) for server in servers(arguments, cores, workers)}
             reports[title] = results
-            tables.append(table(title, results))
+            printed.append(tables(title, results))
 
     if arguments.output:
         arguments.output.write_text(json.dumps(reports, indent=2))
-    print("\n\n".join(tables))
+    print("\n\n".join(printed))
 
 
 if __name__ == "__main__":

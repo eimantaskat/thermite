@@ -1,4 +1,4 @@
-# the FastAPI side of the comparison; app.rs next to it is the same app in thermite
+# the FastAPI side of the comparison; thermite.rs and axum/ beside it are the same app
 from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel

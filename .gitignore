@@ -3,3 +3,4 @@ lcov.info
 *.profraw
 .venv/
 __pycache__/
+/benchmarks/comparison/axum/target

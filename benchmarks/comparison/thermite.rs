@@ -1,4 +1,4 @@
-// the thermite side of the comparison; app.py next to it is the same app in FastAPI
+// the thermite side of the comparison; fastapi_app.py and axum/ beside it are the same app
 use std::env;
 use std::error::Error;
 
@@ -74,7 +74,7 @@ async fn create_items(Json(items): Json<Vec<Item>>) -> Json<Count> {
     Json(Count { count })
 }
 
-// usage: fastapi_comparison <address> <worker threads>, where 1 runs everything on one thread
+// usage: comparison <address> <worker threads>, where 1 runs everything on one thread
 fn main() -> Result<(), Box<dyn Error>> {
     let mut arguments = env::args().skip(1);
     let address = arguments
