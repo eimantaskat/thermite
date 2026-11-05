@@ -52,6 +52,10 @@ impl StateMap {
         self.0.insert(TypeId::of::<T>(), (type_name::<T>(), value));
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub(crate) fn contains(&self, id: TypeId) -> bool {
         self.0.contains_key(&id)
     }

@@ -78,7 +78,11 @@ impl Lifespan {
     }
 
     pub(crate) fn hand_state_to(&self, request: &mut Request) {
-        if let Some(running) = self.running.get() {
+        if let Some(running) = self
+            .running
+            .get()
+            .filter(|running| !running.states.is_empty())
+        {
             request.extensions_mut().insert(Arc::clone(&running.states));
         }
     }
@@ -288,6 +292,18 @@ mod tests {
         lifespan.shutdown().await;
 
         assert_eq!(POOL_STARTS.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn hands_no_map_to_requests_when_the_app_has_no_state() {
+        let lifespan = Lifespan::default();
+        let mut request = Request::default();
+
+        lifespan.startup().await.unwrap();
+        lifespan.hand_state_to(&mut request);
+        lifespan.shutdown().await;
+
+        assert!(request.extensions().get::<Arc<StateMap>>().is_none());
     }
 
     #[tokio::test]

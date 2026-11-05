@@ -19,6 +19,9 @@ pub(super) fn extract_arguments(
     path_parameters: &PathParameters<'_, '_>,
     request: &Request,
 ) -> Result<Arguments, Vec<ValidationError>> {
+    if inputs.parameters.is_empty() && inputs.body.is_none() {
+        return Ok(Arguments::default());
+    }
     // a decoded body is valid, so only the parameters are left to report
     let decoded_body = inputs
         .decoder
