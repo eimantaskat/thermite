@@ -1,0 +1,18 @@
+[build-system]
+requires = ["maturin>=1.16,<2"]
+build-backend = "maturin"
+
+[project]
+name = "thermite-web"
+requires-python = ">=3.11"
+dynamic = ["version"]
+
+[dependency-groups]
+dev = ["maturin>=1.16,<2", "pytest>=9"]
+
+[tool.maturin]
+python-source = "python"
+module-name = "thermite._thermite"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

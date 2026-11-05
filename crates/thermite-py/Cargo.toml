@@ -1,0 +1,21 @@
+[package]
+name = "thermite-py"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "_thermite"
+crate-type = ["cdylib"]
+# its behaviour is tested with pytest against the built module
+test = false
+doctest = false
+
+[dependencies]
+pyo3.workspace = true
+thermite-core.workspace = true
+
+[lints]
+workspace = true

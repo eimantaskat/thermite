@@ -37,6 +37,26 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --all-features
 
+  # installs the wheel, so the packaging is tested along with the module
+  python:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.14"]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: crates/thermite-py
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: Swatinem/rust-cache@v2
+      - run: pip install pytest .
+      - run: pytest
+
   # each benchmark runs once, so one that no longer sets up fails here rather than in a timing run
   benches:
     runs-on: ubuntu-latest
