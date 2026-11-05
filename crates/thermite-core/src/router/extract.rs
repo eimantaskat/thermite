@@ -19,10 +19,17 @@ pub(super) fn extract_arguments(
     path_parameters: &PathParameters<'_, '_>,
     request: &Request,
 ) -> Result<Arguments, Vec<ValidationError>> {
+    // a decoded body is valid, so only the parameters are left to report
+    let decoded_body = inputs
+        .decoder
+        .as_ref()
+        .filter(|_| !request.body().is_empty() && declares_json(request))
+        .and_then(|decoder| decoder.decode(request.body()));
     // like FastAPI, a body that is not JSON fails on its own, before any parameter is checked
     let body = inputs
         .body
         .as_ref()
+        .filter(|_| decoded_body.is_none())
         .map(|schema| read_body(request).map(|input| (schema, input)))
         .transpose()?;
 
@@ -79,7 +86,7 @@ pub(super) fn extract_arguments(
     match (before_body, body, after_body) {
         (Ok(mut parameters), Ok(body), Ok(after_body)) => {
             parameters.extend(after_body);
-            Ok(Arguments::new(parameters, body))
+            Ok(Arguments::new(parameters, body, decoded_body))
         }
         (before_body, body, after_body) => Err(before_body
             .err()
@@ -206,10 +213,13 @@ fn byte_offset(body: &[u8], line: usize, column: usize) -> usize {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use std::any::Any;
+
     use bytes::Bytes;
     use http::{HeaderValue, Method};
 
     use super::*;
+    use crate::decoder::BodyDecoder;
     use crate::description::RouteDescription;
     use crate::router::check::check_description;
     use crate::router::path::PathPattern;
@@ -256,11 +266,109 @@ mod tests {
         extract_arguments(&inputs(description), &PathParameters::default(), request)
     }
 
-    fn json_invalid_at(position: usize, message: &str) -> Result<Arguments, Vec<ValidationError>> {
-        Err(vec![
+    // takes a JSON integer as it is, and gives up on anything validation would coerce or reject
+    struct Integer;
+
+    impl BodyDecoder for Integer {
+        fn decode(&self, body: &[u8]) -> Option<Box<dyn Any + Send>> {
+            let integer: i64 = serde_json::from_slice(body).ok()?;
+            Some(Box::new(integer))
+        }
+    }
+
+    fn with_decoded_body() -> RouteDescription {
+        RouteDescription::new(Method::POST, "/items").body_with_decoder(Schema::integer(), Integer)
+    }
+
+    fn decoded(arguments: &Arguments) -> Option<i64> {
+        let decoded = arguments.take_decoded_body()?;
+        decoded.downcast::<i64>().ok().map(|integer| *integer)
+    }
+
+    #[test]
+    fn a_decoded_body_is_not_also_validated() {
+        let arguments = extract(&with_decoded_body(), &request("/items", None, "42")).unwrap();
+
+        assert_eq!(arguments.body(), None);
+        assert_eq!(decoded(&arguments), Some(42));
+    }
+
+    #[test]
+    fn a_body_the_decoder_gives_up_on_is_validated() {
+        let coerced = extract(&with_decoded_body(), &request("/items", None, "\"7\"")).unwrap();
+        let invalid = extract(&with_decoded_body(), &request("/items", None, "\"x\""));
+        let broken = extract(&with_decoded_body(), &request("/items", None, "4 2"));
+
+        assert_eq!(coerced.body(), Some(&json!(7)));
+        assert_eq!(decoded(&coerced), None);
+        assert_eq!(
+            invalid.err(),
+            Some(vec![ValidationError::at(
+                ErrorKind::IntParsing,
+                json!(["body"]),
+                json!("x")
+            )])
+        );
+        assert_eq!(
+            broken.err(),
+            Some(json_invalid_at(2, "trailing characters"))
+        );
+    }
+
+    #[test]
+    fn only_a_json_body_is_decoded() {
+        let text = extract(
+            &with_decoded_body(),
+            &request("/items", Some("text/plain"), "42"),
+        )
+        .unwrap();
+        let empty = extract(&with_decoded_body(), &request("/items", None, ""));
+
+        assert_eq!(text.body(), Some(&json!(42)));
+        assert_eq!(decoded(&text), None);
+        assert_eq!(
+            empty.err(),
+            Some(vec![ValidationError::at(
+                ErrorKind::Missing,
+                json!(["body"]),
+                json!(null)
+            )])
+        );
+    }
+
+    #[test]
+    fn a_decoded_body_leaves_only_the_parameter_errors() {
+        let description =
+            with_decoded_body().parameter(Parameter::query("limit", Schema::integer()));
+
+        let errors = extract(&description, &request("/items?limit=x", None, "42"));
+
+        assert_eq!(
+            errors.err(),
+            Some(vec![ValidationError::at(
+                ErrorKind::IntParsing,
+                json!(["query", "limit"]),
+                json!("x")
+            )])
+        );
+    }
+
+    #[test]
+    fn a_body_read_in_two_places_is_validated_instead_of_decoded() {
+        let description = with_decoded_body()
+            .dependency(|dependency| dependency.body_with_decoder(Schema::integer(), Integer));
+
+        let arguments = extract(&description, &request("/items", None, "42")).unwrap();
+
+        assert_eq!(arguments.body(), Some(&json!(42)));
+        assert_eq!(decoded(&arguments), None);
+    }
+
+    fn json_invalid_at(position: usize, message: &str) -> Vec<ValidationError> {
+        vec![
             ValidationError::at(ErrorKind::JsonInvalid, json!(["body", position]), json!({}))
                 .with_context(json!({ "error": message })),
-        ])
+        ]
     }
 
     #[test]
@@ -293,8 +401,8 @@ mod tests {
 
         assert_eq!(text.body(), Some(&json!("{not json")));
         assert_eq!(
-            object,
-            Err(vec![ValidationError::at(
+            object.err(),
+            Some(vec![ValidationError::at(
                 ErrorKind::ModelAttributesType,
                 json!(["body"]),
                 json!("{}")
@@ -309,7 +417,7 @@ mod tests {
 
         let errors = extract(&description, &request("/items", None, "{\n  \"a\": }"));
 
-        assert_eq!(errors, json_invalid_at(9, "expected value"));
+        assert_eq!(errors.err(), Some(json_invalid_at(9, "expected value")));
     }
 
     #[test]
@@ -322,8 +430,14 @@ mod tests {
         );
         let blank = extract(&description, &request("/items", None, "   "));
 
-        assert_eq!(cut, json_invalid_at(17, "EOF while parsing a value"));
-        assert_eq!(blank, json_invalid_at(3, "EOF while parsing a value"));
+        assert_eq!(
+            cut.err(),
+            Some(json_invalid_at(17, "EOF while parsing a value"))
+        );
+        assert_eq!(
+            blank.err(),
+            Some(json_invalid_at(3, "EOF while parsing a value"))
+        );
     }
 
     #[test]
@@ -409,8 +523,8 @@ mod tests {
         let errors = extract(&description, &request("/items?limit=x", None, "\"text\""));
 
         assert_eq!(
-            errors,
-            Err(vec![
+            errors.err(),
+            Some(vec![
                 ValidationError::at(ErrorKind::Missing, json!(["header", "x-key"]), json!(null)),
                 ValidationError::at(ErrorKind::IntParsing, json!(["body"]), json!("text")),
                 ValidationError::at(ErrorKind::IntParsing, json!(["query", "limit"]), json!("x")),
@@ -435,8 +549,8 @@ mod tests {
         );
 
         assert_eq!(
-            errors,
-            Err(vec![
+            errors.err(),
+            Some(vec![
                 ValidationError::at(ErrorKind::IntParsing, json!(["path", "id"]), json!("x")),
                 ValidationError::at(ErrorKind::Missing, json!(["query", "tag"]), json!(null)),
                 ValidationError::at(

@@ -19,6 +19,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+proptest.workspace = true
 reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "signal", "sync", "time"] }

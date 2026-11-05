@@ -1021,6 +1021,7 @@ dependencies = [
  "bytes",
  "criterion",
  "http",
+ "proptest",
  "reqwest",
  "serde",
  "serde_json",

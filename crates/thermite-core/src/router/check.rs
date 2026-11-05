@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use super::path::PathPattern;
+use crate::decoder::Decoder;
 use crate::description::{
     Body, Declarations, Parameter, ParameterLocation, ResponseDescription, RouteDescription,
 };
@@ -13,6 +14,7 @@ use crate::security::SecuritySchemeDescription;
 pub(super) struct Inputs {
     pub(super) parameters: Vec<Parameter>,
     pub(super) body: Option<Schema>,
+    pub(super) decoder: Option<Decoder>,
     // like FastAPI, body errors follow the values of the group that declared the body
     pub(super) body_position: usize,
 }
@@ -110,15 +112,22 @@ fn flatten(declarations: Declarations, path: &str, inputs: &mut Inputs) -> Resul
     }
     match (body, &inputs.body) {
         (Body::NotDeclared, _) => Ok(()),
-        (Body::Declared(schema), None) => {
+        (Body::Declared(schema, decoder), None) => {
             inputs.body = Some(schema);
+            inputs.decoder = decoder;
             inputs.body_position = inputs.parameters.len();
             Ok(())
         }
-        (Body::Declared(schema), Some(earlier)) if schema == *earlier => Ok(()),
-        (Body::Declared(_), Some(_)) | (Body::DeclaredTwice, _) => Err(RouteError::DuplicateBody {
-            path: path.to_owned(),
-        }),
+        // a decoded body can be taken only once, so a body read in two places is validated instead
+        (Body::Declared(schema, _), Some(earlier)) if schema == *earlier => {
+            inputs.decoder = None;
+            Ok(())
+        }
+        (Body::Declared(..), Some(_)) | (Body::DeclaredTwice, _) => {
+            Err(RouteError::DuplicateBody {
+                path: path.to_owned(),
+            })
+        }
     }
 }
 

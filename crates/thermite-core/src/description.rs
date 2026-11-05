@@ -5,6 +5,7 @@ use std::fmt;
 use http::{HeaderName, Method};
 use serde_json::Value;
 
+use crate::decoder::{BodyDecoder, Decoder};
 use crate::schema::{Field, Schema};
 use crate::security::SecuritySchemeDescription;
 pub use response::ResponseDescription;
@@ -35,7 +36,7 @@ pub(crate) struct Declarations {
 pub(crate) enum Body {
     #[default]
     NotDeclared,
-    Declared(Schema),
+    Declared(Schema, Option<Decoder>),
     DeclaredTwice,
 }
 
@@ -86,10 +87,20 @@ impl RouteDescription {
     }
 
     #[must_use]
-    pub fn body(mut self, schema: Schema) -> Self {
+    pub fn body(self, schema: Schema) -> Self {
+        self.declare_body(schema, None)
+    }
+
+    // the decoder is tried first on a JSON body, and validation runs only when it gives up
+    #[must_use]
+    pub fn body_with_decoder(self, schema: Schema, decoder: impl BodyDecoder) -> Self {
+        self.declare_body(schema, Some(Decoder::new(decoder)))
+    }
+
+    fn declare_body(mut self, schema: Schema, decoder: Option<Decoder>) -> Self {
         self.declarations.body = match self.declarations.body {
-            Body::NotDeclared => Body::Declared(schema),
-            Body::Declared(_) | Body::DeclaredTwice => Body::DeclaredTwice,
+            Body::NotDeclared => Body::Declared(schema, decoder),
+            Body::Declared(..) | Body::DeclaredTwice => Body::DeclaredTwice,
         };
         self
     }

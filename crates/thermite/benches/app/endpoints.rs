@@ -98,9 +98,22 @@ fn endpoints(criterion: &mut Criterion) {
         items: (0..LARGE_ORDER_ITEMS).map(item).collect(),
     });
 
+    // the last price is wrong, so serde gives up only at the end and validation parses the body again
+    let mut invalid: serde_json::Value = serde_json::from_slice(&large).expect("a JSON body");
+    if let Some(last) = invalid["items"]
+        .as_array_mut()
+        .and_then(|items| items.last_mut())
+    {
+        last["price"] = "free".into();
+    }
+    let large_invalid = to_body(&invalid);
+
     let mut group = criterion.benchmark_group("endpoints");
+    let mut bench_status = |name: &str, status, build: &dyn Fn() -> thermite::Request| {
+        bench_send(&mut group, &runtime, name, &server, status, build);
+    };
     let mut bench = |name: &str, build: &dyn Fn() -> thermite::Request| {
-        bench_send(&mut group, &runtime, name, &server, StatusCode::OK, build);
+        bench_status(name, StatusCode::OK, build);
     };
     bench("plaintext", &|| {
         request(thermite::http::Request::get("/"), "")
@@ -123,6 +136,16 @@ fn endpoints(criterion: &mut Criterion) {
             large.clone(),
         )
     });
+    bench_status(
+        "json_body/large_invalid",
+        StatusCode::UNPROCESSABLE_ENTITY,
+        &|| {
+            request(
+                thermite::http::Request::post("/orders").header(CONTENT_TYPE, "application/json"),
+                large_invalid.clone(),
+            )
+        },
+    );
     group.finish();
 }
 
