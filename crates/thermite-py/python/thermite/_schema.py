@@ -3,13 +3,14 @@ import inspect
 import json
 import types
 import typing
-from typing import Annotated, Any, Union
+from collections.abc import Callable
+from typing import Annotated, Any, TypeGuard, Union
 
 from thermite._thermite import Field, RouteError, Schema
 
 NO_DEFAULT = inspect.Parameter.empty
 
-_SCALARS = {
+_SCALARS: dict[object, Callable[[], Schema]] = {
     str: Schema.string,
     int: Schema.integer,
     float: Schema.number,
@@ -49,13 +50,13 @@ def field_of(
         return Field.required(name, schema)
     if default is None:
         return Field.optional(name, schema)
-    # the core keeps a default only if validating it changes nothing, and it reads a number as a float
+    # the core rejects a default that validating would change, and 1 becomes 1.0
     if inner is float and type(default) is int:
         default = float(default)
     return Field.with_default(name, schema, _default_json(default))
 
 
-# `int | None` as (int, True); only None may be left out of a union, since schemas have no unions
+# `int | None` as (int, True); schemas have no unions, so only None can go
 def split_none(annotation: object) -> tuple[object, bool]:
     annotation = strip_annotated(annotation)
     if typing.get_origin(annotation) not in (Union, types.UnionType):
@@ -72,7 +73,7 @@ def strip_annotated(annotation: object) -> object:
     return annotation
 
 
-def is_model(annotation: object) -> bool:
+def is_model(annotation: object) -> TypeGuard[type]:
     return isinstance(annotation, type) and dataclasses.is_dataclass(annotation)
 
 
@@ -100,7 +101,7 @@ def _model_schema(model: type, enclosing: tuple[type, ...]) -> Schema:
     return Schema.model(model.__name__, fields)
 
 
-def _field_default(field: dataclasses.Field) -> object:
+def _field_default(field: dataclasses.Field[object]) -> object:
     if field.default is not dataclasses.MISSING:
         return field.default
     if field.default_factory is not dataclasses.MISSING:

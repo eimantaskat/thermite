@@ -5,7 +5,7 @@ import typing
 from collections.abc import Callable
 from typing import Annotated
 
-from thermite._markers import Body, Marker, is_marker
+from thermite._markers import Marker, is_marker
 from thermite._schema import (
     NO_DEFAULT,
     field_of,
@@ -66,12 +66,11 @@ def _describe_parameter(
         raise RouteError("a handler's parameters must be passable by name")
     if is_marker(parameter.default):
         raise RouteError("write the marker in the type, as `Annotated[str, Query()]`")
-    marker = _marker_of(parameter.annotation)
-    if _reads_body(parameter, marker, path_names):
+    location = _location_of(parameter, path_names)
+    if location is None:
         if parameter.default is not NO_DEFAULT:
             raise RouteError("an optional body is not supported yet")
         return schema_of(parameter.annotation)
-    location = _location_of(parameter.name, marker, path_names)
     name = parameter.name
     if location == ParameterLocation.Header:
         name = name.replace("_", "-")
@@ -81,39 +80,32 @@ def _describe_parameter(
 def _marker_of(annotation: object) -> Marker | type[Marker] | None:
     if typing.get_origin(annotation) is not Annotated:
         return None
-    markers = [item for item in annotation.__metadata__ if is_marker(item)]
+    markers = [item for item in typing.get_args(annotation)[1:] if is_marker(item)]
     if len(markers) > 1:
         raise RouteError("only one of Path, Query, Header, Cookie and Body can be used")
     return markers[0] if markers else None
 
 
-def _reads_body(
-    parameter: inspect.Parameter,
-    marker: Marker | type[Marker] | None,
-    path_names: set[str],
-) -> bool:
+# None is the body; like FastAPI, only a marked list is read from the query
+def _location_of(
+    parameter: inspect.Parameter, path_names: set[str]
+) -> ParameterLocation | None:
+    marker = _marker_of(parameter.annotation)
     if marker is not None:
-        return marker is Body or isinstance(marker, Body)
+        return marker.location
     if parameter.name in path_names:
-        return False
-    return not _is_scalar(split_none(parameter.annotation)[0])
+        return ParameterLocation.Path
+    if _is_scalar(split_none(parameter.annotation)[0]):
+        return ParameterLocation.Query
+    return None
 
 
-# like FastAPI, a list is only read from the query when marked, as `Annotated[list[str], Query()]`
 def _is_scalar(annotation: object) -> bool:
     return (
         annotation is not list
         and typing.get_origin(annotation) is not list
         and not is_model(annotation)
     )
-
-
-def _location_of(
-    name: str, marker: Marker | type[Marker] | None, path_names: set[str]
-) -> ParameterLocation:
-    if marker is not None:
-        return marker.location
-    return ParameterLocation.Path if name in path_names else ParameterLocation.Query
 
 
 def _describe_response(annotation: object) -> Schema | None:

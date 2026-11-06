@@ -9,3 +9,6 @@ __pycache__/
 /crates/thermite-py/python/thermite/*.pyd
 /crates/thermite-py/python/thermite/*.so
 /crates/thermite-py/python/thermite/*.pdb
+.coverage
+.mypy_cache/
+.ruff_cache/

@@ -1,4 +1,5 @@
 import pytest
+
 from thermite._thermite import CoreApp, Field, Schema
 
 

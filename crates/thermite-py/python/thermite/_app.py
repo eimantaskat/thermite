@@ -37,7 +37,8 @@ class App:
         return self._route("TRACE", path)
 
     def openapi(self) -> dict[str, object]:
-        return json.loads(self._core.openapi_json())
+        document: dict[str, object] = json.loads(self._core.openapi_json())
+        return document
 
     def _route(self, method: str, path: str) -> Callable[[Handler], Handler]:
         def register(handler: Handler) -> Handler:

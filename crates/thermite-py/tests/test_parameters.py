@@ -1,6 +1,7 @@
 from typing import Annotated, Any, Optional
 
 import pytest
+
 from thermite import App, Body, Cookie, Header, Path, Query, RouteError
 
 
@@ -65,7 +66,7 @@ def test_a_default_makes_a_parameter_optional_and_is_documented():
     assert parameter["schema"]["default"] == 10
 
 
-@pytest.mark.parametrize("annotation", [str | None, Optional[str]])
+@pytest.mark.parametrize("annotation", [str | None, Optional[str]])  # noqa: UP045
 def test_none_as_default_makes_a_nullable_optional_parameter(annotation):
     def handler(q: annotation = None):
         pass
@@ -217,7 +218,7 @@ def test_an_unsupported_type_is_rejected_by_name(annotation):
 
 
 def test_an_unhashable_annotation_is_rejected_like_any_other():
-    def handler(value: ["not", "a", "type"]):
+    def handler(value: ["not", "a", "type"]):  # noqa: F722, F821
         pass
 
     with pytest.raises(RouteError, match="not supported yet"):

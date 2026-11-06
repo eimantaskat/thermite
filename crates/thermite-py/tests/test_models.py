@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Annotated
 
 import pytest
+
 from thermite import App, Body, Query, RouteError
 
 
