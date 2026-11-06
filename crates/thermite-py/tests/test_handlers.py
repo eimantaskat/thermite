@@ -195,6 +195,72 @@ def test_an_annotated_body_is_read_as_its_model():
     assert response.json() == "Tag"
 
 
+def test_a_body_field_the_model_does_not_declare_is_left_out():
+    def handler(tag: Tag):
+        return tag.name
+
+    client = client_for(handler, method="post")
+
+    assert client.post("/items", json={"name": "a", "other": 1}).json() == "a"
+
+
+def test_a_field_that_is_not_an_init_argument_stays_out_of_the_body():
+    @dataclass
+    class Computed:
+        name: str
+        size: int = field(init=False, default=7)
+
+    def handler(computed: Computed):
+        return computed.size
+
+    client = client_for(handler, method="post")
+
+    assert client.post("/items", json={"name": "a", "size": 1}).json() == 7
+
+
+def test_a_null_for_an_optional_list_of_models_is_none():
+    @dataclass
+    class Group:
+        tags: list[Tag] | None = None
+
+    def handler(group: Group):
+        return group.tags and [type(tag).__name__ for tag in group.tags]
+
+    client = client_for(handler, method="post")
+
+    assert client.post("/items", json={"tags": None}).json() is None
+    assert client.post("/items", json={"tags": [{"name": "a"}]}).json() == ["Tag"]
+
+
+def test_a_list_of_plain_values_in_a_model_arrives_as_sent():
+    @dataclass
+    class Labels:
+        names: list[str]
+
+    def handler(labels: Labels):
+        return labels.names
+
+    client = client_for(handler, method="post")
+
+    assert client.post("/items", json={"names": ["a", "b"]}).json() == ["a", "b"]
+
+
+@dataclass
+class Node:
+    name: str
+    child: "Node | None" = None
+
+
+def test_a_model_inside_itself_arrives_as_that_model_at_every_level():
+    def handler(node: Node):
+        return [type(node.child).__name__, node.child.child.child]
+
+    client = client_for(handler, method="post")
+    body = {"name": "a", "child": {"name": "b", "child": {"name": "c"}}}
+
+    assert client.post("/items", json=body).json() == ["Node", None]
+
+
 def test_a_returned_model_answers_its_fields_including_nested_ones():
     def handler():
         return [Item("a", tags=[Tag("x")])]

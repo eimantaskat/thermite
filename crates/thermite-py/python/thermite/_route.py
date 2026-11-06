@@ -14,11 +14,14 @@ from thermite._thermite import Respond
 
 _logger = logging.getLogger("thermite.error")
 
+Decoder = Callable[[Any], object]
+
 
 @dataclasses.dataclass(frozen=True)
 class BodyArgument:
     name: str
-    annotation: object
+    # None when the value is already what the handler takes
+    decoder: Decoder | None
 
 
 # set before the first request, by whatever is about to serve the app
@@ -36,7 +39,8 @@ class Route:
 
     def _call_handler(self, arguments: dict[str, object], body: object) -> object:
         if self._body is not None:
-            arguments[self._body.name] = _decode(self._body.annotation, body)
+            decoder = self._body.decoder
+            arguments[self._body.name] = body if decoder is None else decoder(body)
         return self._handler(**arguments)
 
     def _fail(self, respond: Respond, error: BaseException) -> None:
@@ -99,32 +103,57 @@ def is_async(handler: Callable[..., object]) -> bool:
     )
 
 
-def _decode(annotation: object, value: object) -> object:
+# read once per route, as annotations are slow; the core has validated the values
+def decoder_of(annotation: object) -> Decoder | None:
+    return _decoder_of(annotation, {})
+
+
+def _decoder_of(annotation: object, models: dict[type, Decoder]) -> Decoder | None:
     annotation, _ = split_none(annotation)
-    if value is None:
+    if typing.get_origin(annotation) is list:
+        return _list_decoder(typing.get_args(annotation)[0], models)
+    if is_model(annotation):
+        return models.get(annotation) or _model_decoder(annotation, models)
+    return None
+
+
+def _list_decoder(item: object, models: dict[type, Decoder]) -> Decoder | None:
+    item_decoder = _decoder_of(item, models)
+    if item_decoder is None:
         return None
-    if typing.get_origin(annotation) is list and isinstance(value, list):
-        item = typing.get_args(annotation)[0]
-        return [_decode(item, element) for element in value]
-    if is_model(annotation) and isinstance(value, dict):
-        return annotation(
-            **{
-                name: _decode(field_annotation, value[name])
-                for name, field_annotation in _model_fields(annotation)
-                if name in value
-            }
-        )
-    return value
+
+    def decode(value: list[object] | None) -> object:
+        if value is None:
+            return None
+        return [item_decoder(element) for element in value]
+
+    return decode
 
 
-@functools.cache
-def _model_fields(model: type) -> list[tuple[str, object]]:
+def _model_decoder(model: type, models: dict[type, Decoder]) -> Decoder:
+    plain: list[str] = []
+    nested: list[tuple[str, Decoder]] = []
+
+    def decode(value: dict[str, object] | None) -> object:
+        if value is None:
+            return None
+        arguments = {name: value[name] for name in plain if name in value}
+        for name, decoder in nested:
+            if name in value:
+                arguments[name] = decoder(value[name])
+        return model(**arguments)
+
+    # known before its fields are read, for a model that contains itself
+    models[model] = decode
     hints = typing.get_type_hints(model, include_extras=True)
-    return [
-        (field.name, hints[field.name])
-        for field in dataclasses.fields(model)
-        if field.init
-    ]
+    for field in dataclasses.fields(model):
+        if field.init:
+            decoder = _decoder_of(hints[field.name], models)
+            if decoder is None:
+                plain.append(field.name)
+            else:
+                nested.append((field.name, decoder))
+    return decode
 
 
 def _encode(value: object) -> bytes:

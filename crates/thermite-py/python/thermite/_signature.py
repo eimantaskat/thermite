@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Annotated
 
 from thermite._markers import Marker, is_marker
-from thermite._route import BodyArgument
+from thermite._route import BodyArgument, decoder_of
 from thermite._schema import (
     NO_DEFAULT,
     field_of,
@@ -48,7 +48,7 @@ def describe_handler(handler: Callable[..., object], path: str) -> HandlerDescri
         if isinstance(described, Parameter):
             parameters.append(described)
         else:
-            argument = BodyArgument(parameter.name, parameter.annotation)
+            argument = BodyArgument(parameter.name, decoder_of(parameter.annotation))
             bodies.append((argument, described))
     if len(bodies) > 1:
         raise RouteError(f"handler `{name}` declares more than one body")
