@@ -5,7 +5,7 @@ from collections.abc import Callable
 from types import FrameType
 from typing import TypeVar
 
-from thermite._route import AsyncRoute, EventLoopSlot, SyncRoute, is_async
+from thermite._route import AsyncRoute, SyncRoute, is_async
 from thermite._signature import describe_handler
 from thermite._thermite import CoreApp, TestServer
 
@@ -15,7 +15,6 @@ Handler = TypeVar("Handler", bound=Callable[..., object])
 class App:
     def __init__(self) -> None:
         self._core = CoreApp()
-        self._event_loop = EventLoopSlot()
 
     def get(self, path: str) -> Callable[[Handler], Handler]:
         return self._route("GET", path)
@@ -50,8 +49,7 @@ class App:
 
     async def _serve(self, host: str, port: int) -> None:
         loop = asyncio.get_running_loop()
-        self._event_loop.loop = loop
-        server = self._core.server(host, port)
+        server = self._core.server(host, port, loop)
 
         def request_shutdown(_signal: int, _frame: FrameType | None) -> None:
             server.request_shutdown()
@@ -71,17 +69,14 @@ class App:
                 signal.signal(handled, handler)
 
     def _start_test_server(self, loop: asyncio.AbstractEventLoop) -> TestServer:
-        self._event_loop.loop = loop
-        return self._core.test_server()
+        return self._core.test_server(loop)
 
     def _route(self, method: str, path: str) -> Callable[[Handler], Handler]:
         def register(handler: Handler) -> Handler:
             described = describe_handler(handler, path)
-            route = (
-                AsyncRoute(handler, described.body, described.name, self._event_loop)
-                if is_async(handler)
-                else SyncRoute(handler, described.body, described.name)
-            )
+            on_event_loop = is_async(handler)
+            kind = AsyncRoute if on_event_loop else SyncRoute
+            route = kind(handler, described.body, described.name)
             self._core.add_route(
                 method,
                 path,
@@ -90,6 +85,7 @@ class App:
                 described.body_schema,
                 described.response,
                 route,
+                on_event_loop,
             )
             return handler
 

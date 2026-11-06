@@ -9,7 +9,8 @@ use thermite_core::{
 
 use crate::RouteError;
 use crate::description::{Parameter, Schema};
-use crate::route::PythonRoute;
+use crate::event_loop::EventLoopQueue;
+use crate::route::{Dispatch, PythonRoute};
 use crate::server::{PythonServer, ServedApp, TestServer};
 
 #[pyclass(module = "thermite._thermite")]
@@ -17,6 +18,7 @@ use crate::server::{PythonServer, ServedApp, TestServer};
 pub(crate) struct CoreApp {
     // shared with what serves the app, and only written to while nothing does
     router: Arc<Router>,
+    event_loop_queue: Arc<EventLoopQueue>,
 }
 
 #[pymethods]
@@ -36,6 +38,7 @@ impl CoreApp {
         body: Option<Schema>,
         response: Option<Schema>,
         route: Py<PyAny>,
+        on_event_loop: bool,
     ) -> PyResult<()> {
         let router = Arc::get_mut(&mut self.router).ok_or_else(|| {
             RouteError::new_err(format!(
@@ -57,17 +60,22 @@ impl CoreApp {
                     .with_schema(response.0),
             );
         }
+        let dispatch = if on_event_loop {
+            Dispatch::EventLoop(Arc::clone(&self.event_loop_queue))
+        } else {
+            Dispatch::BlockingPool
+        };
         router
-            .route(description, PythonRoute::new(route, parameters))
+            .route(description, PythonRoute::new(route, parameters, dispatch))
             .map_err(|error| RouteError::new_err(error.to_string()))
     }
 
-    fn server(&self, host: &str, port: u16) -> PyResult<PythonServer> {
-        Ok(PythonServer::new(self.served()?, host, port))
+    fn server(&self, host: &str, port: u16, event_loop: Py<PyAny>) -> PyResult<PythonServer> {
+        Ok(PythonServer::new(self.served(event_loop)?, host, port))
     }
 
-    fn test_server(&self) -> PyResult<TestServer> {
-        TestServer::new(self.served()?)
+    fn test_server(&self, event_loop: Py<PyAny>) -> PyResult<TestServer> {
+        TestServer::new(self.served(event_loop)?)
     }
 
     fn openapi_json(&self) -> PyResult<String> {
@@ -84,7 +92,8 @@ impl CoreApp {
 }
 
 impl CoreApp {
-    fn served(&self) -> PyResult<ServedApp> {
+    fn served(&self, event_loop: Py<PyAny>) -> PyResult<ServedApp> {
+        self.event_loop_queue.set_event_loop(event_loop);
         ServedApp::new(Arc::clone(&self.router))
     }
 }

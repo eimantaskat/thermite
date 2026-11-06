@@ -12,19 +12,29 @@ use thermite_core::{Arguments, Request, Response, RouteHandler, Value, attach_er
 use tokio::sync::oneshot;
 
 use crate::description::Parameter;
+use crate::event_loop::EventLoopQueue;
+
+#[derive(Debug, Clone)]
+pub(crate) enum Dispatch {
+    // a `def` handler may block, so it gets a thread of its own
+    BlockingPool,
+    EventLoop(Arc<EventLoopQueue>),
+}
 
 // the Python object that runs the handler, with what the core's arguments are called in its signature
 #[derive(Debug)]
 pub(crate) struct PythonRoute {
     route: Arc<Py<PyAny>>,
     parameters: Arc<[Parameter]>,
+    dispatch: Dispatch,
 }
 
 impl PythonRoute {
-    pub(crate) fn new(route: Py<PyAny>, parameters: Vec<Parameter>) -> Self {
+    pub(crate) fn new(route: Py<PyAny>, parameters: Vec<Parameter>, dispatch: Dispatch) -> Self {
         Self {
             route: Arc::new(route),
             parameters: parameters.into(),
+            dispatch,
         }
     }
 }
@@ -37,18 +47,22 @@ impl RouteHandler for PythonRoute {
     ) -> impl Future<Output = Response> + Send {
         let route = Arc::clone(&self.route);
         let parameters = Arc::clone(&self.parameters);
+        let dispatch = self.dispatch.clone();
         let (sender, receiver) = oneshot::channel();
         async move {
-            // taking the GIL can wait for as long as another thread keeps it, which would stall an async worker
-            tokio::task::spawn_blocking(move || {
-                let respond = Respond::new(sender);
-                Python::attach(|py| {
-                    if let Err(error) = start(py, &route, &parameters, &arguments, respond.clone())
-                    {
-                        respond.finish(Err(error));
-                    }
-                });
-            });
+            let respond = Respond::new(sender);
+            let job = move |py: Python<'_>| {
+                if let Err(error) = start(py, &route, &parameters, &arguments, respond.clone()) {
+                    respond.finish(Err(error));
+                }
+            };
+            match dispatch {
+                // taking the GIL can wait for as long as another thread keeps it, which would stall an async worker
+                Dispatch::BlockingPool => {
+                    tokio::task::spawn_blocking(move || Python::attach(job));
+                }
+                Dispatch::EventLoop(queue) => queue.push(Box::new(job)),
+            }
             match receiver.await {
                 Ok(Ok(body)) => json_response(body),
                 Ok(Err(error)) => {

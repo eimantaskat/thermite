@@ -566,3 +566,42 @@ def test_a_handler_waiting_on_what_only_it_holds_survives_a_garbage_collection()
 
     assert response.status_code == 200
     assert response.json() == "woken"
+
+
+def test_async_requests_sent_together_are_all_answered_on_the_event_loop():
+    threads = set()
+
+    async def handler(number: int):
+        threads.add(threading.get_ident())
+        await asyncio.sleep(0)
+        return number
+
+    client = client_for(handler, path="/items/{number}")
+    with ThreadPoolExecutor(32) as pool:
+        answers = list(
+            pool.map(lambda n: client.get(f"/items/{n}").json(), range(2000))
+        )
+
+    assert answers == list(range(2000))
+    assert len(threads) == 1
+
+
+def test_a_def_handler_does_not_hold_up_an_async_one():
+    released = threading.Event()
+
+    def blocking():
+        assert released.wait(5)
+        return "released"
+
+    async def quick():
+        released.set()
+        return "quick"
+
+    app = App()
+    app.get("/blocking")(blocking)
+    app.get("/quick")(quick)
+    client = TestClient(app)
+    with ThreadPoolExecutor(1) as pool:
+        blocked = pool.submit(client.get, "/blocking")
+        assert client.get("/quick").json() == "quick"
+        assert blocked.result().json() == "released"

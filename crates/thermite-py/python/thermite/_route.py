@@ -1,5 +1,4 @@
 import asyncio
-import concurrent.futures
 import dataclasses
 import functools
 import inspect
@@ -22,11 +21,6 @@ class BodyArgument:
     name: str
     # None when the value is already what the handler takes
     decoder: Decoder | None
-
-
-# set before the first request, by whatever is about to serve the app
-class EventLoopSlot:
-    loop: asyncio.AbstractEventLoop
 
 
 class Route:
@@ -59,40 +53,33 @@ class SyncRoute(Route):
             self._fail(respond, error)
 
 
+# called on the event loop's thread
 class AsyncRoute(Route):
     def __init__(
-        self,
-        handler: Callable[..., object],
-        body: BodyArgument | None,
-        name: str,
-        event_loop: EventLoopSlot,
+        self, handler: Callable[..., object], body: BodyArgument | None, name: str
     ) -> None:
         super().__init__(handler, body, name)
-        self._event_loop = event_loop
-        # the event loop only keeps a weak reference, and each of these holds its task
-        self._running: set[concurrent.futures.Future[object]] = set()
+        # the event loop only keeps a weak reference to a task
+        self._running: set[asyncio.Task[object]] = set()
 
     def start(
         self, arguments: dict[str, object], body: object, respond: Respond
     ) -> None:
         try:
             coroutine = self._call_handler(arguments, body)
-            future = asyncio.run_coroutine_threadsafe(
-                cast(Coroutine[Any, Any, object], coroutine), self._event_loop.loop
+            task = asyncio.get_running_loop().create_task(
+                cast(Coroutine[Any, Any, object], coroutine)
             )
         except BaseException as error:
             self._fail(respond, error)
         else:
-            self._running.add(future)
-            future.add_done_callback(functools.partial(self._finish, respond))
+            self._running.add(task)
+            task.add_done_callback(functools.partial(self._finish, respond))
 
-    # runs on the event loop's thread, once the handler is done
-    def _finish(
-        self, respond: Respond, future: concurrent.futures.Future[object]
-    ) -> None:
-        self._running.discard(future)
+    def _finish(self, respond: Respond, task: asyncio.Task[object]) -> None:
+        self._running.discard(task)
         try:
-            respond.succeed(_encode(future.result()))
+            respond.succeed(_encode(task.result()))
         except BaseException as error:
             self._fail(respond, error)
 

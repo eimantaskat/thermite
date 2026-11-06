@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -92,7 +93,7 @@ impl PythonServer {
 #[pyclass(frozen, module = "thermite._thermite")]
 #[derive(Debug)]
 pub(crate) struct TestServer {
-    runtime: Runtime,
+    runtime: ManuallyDrop<Runtime>,
     server: InProcessServer<ServedApp>,
 }
 
@@ -102,7 +103,20 @@ impl TestServer {
         let server = runtime
             .block_on(InProcessServer::start(app))
             .map_err(|error| PyOSError::new_err(error.to_string()))?;
-        Ok(Self { runtime, server })
+        Ok(Self {
+            runtime: ManuallyDrop::new(runtime),
+            server,
+        })
+    }
+}
+
+impl Drop for TestServer {
+    fn drop(&mut self) {
+        // SAFETY: `drop` runs once and nothing reads `runtime` after this
+        #[allow(unsafe_code)] // the alternative is an `Option` that is never `None` while in use
+        let runtime = unsafe { ManuallyDrop::take(&mut self.runtime) };
+        // an ordinary drop waits for the blocking pool, where a thread can be waiting for the GIL held here
+        runtime.shutdown_background();
     }
 }
 
