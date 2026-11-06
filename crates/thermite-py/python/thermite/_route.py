@@ -65,6 +65,8 @@ class AsyncRoute(Route):
     ) -> None:
         super().__init__(handler, body, name)
         self._event_loop = event_loop
+        # the event loop only keeps a weak reference, and each of these holds its task
+        self._running: set[concurrent.futures.Future[object]] = set()
 
     def start(
         self, arguments: dict[str, object], body: object, respond: Respond
@@ -77,12 +79,14 @@ class AsyncRoute(Route):
         except BaseException as error:
             self._fail(respond, error)
         else:
+            self._running.add(future)
             future.add_done_callback(functools.partial(self._finish, respond))
 
     # runs on the event loop's thread, once the handler is done
     def _finish(
         self, respond: Respond, future: concurrent.futures.Future[object]
     ) -> None:
+        self._running.discard(future)
         try:
             respond.succeed(_encode(future.result()))
         except BaseException as error:

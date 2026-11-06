@@ -1,7 +1,9 @@
 import asyncio
 import functools
+import gc
 import logging
 import threading
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Annotated, Any
@@ -477,3 +479,24 @@ def test_a_route_shadowing_the_document_stops_the_client_from_starting():
 
     with pytest.raises(RouteError, match="/openapi.json"):
         client_for(handler, "/openapi.json")
+
+
+def test_a_handler_waiting_on_what_only_it_holds_survives_a_garbage_collection():
+    async def handler():
+        loop = asyncio.get_running_loop()
+        waited = loop.create_future()
+        reference = weakref.ref(waited)
+
+        def wake():
+            future = reference()
+            if future is not None:
+                future.set_result("woken")
+
+        loop.call_soon(gc.collect)
+        loop.call_later(0.05, wake)
+        return await waited
+
+    response = client_for(handler).get("/items")
+
+    assert response.status_code == 200
+    assert response.json() == "woken"
