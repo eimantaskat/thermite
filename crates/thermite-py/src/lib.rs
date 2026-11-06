@@ -1,23 +1,18 @@
+mod app;
+mod description;
+
+use pyo3::create_exception;
+use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
-use thermite_core::Router;
 
-#[pyclass(module = "thermite")]
-#[derive(Debug, Default)]
-struct App {
-    #[expect(dead_code, reason = "step 23 adds routes to it")]
-    router: Router,
-}
-
-#[pymethods]
-impl App {
-    #[new]
-    fn new() -> Self {
-        Self::default()
-    }
-}
+create_exception!(thermite, RouteError, PyException);
 
 #[pymodule]
 mod _thermite {
     #[pymodule_export]
-    use super::App;
+    use super::RouteError;
+    #[pymodule_export]
+    use super::app::CoreApp;
+    #[pymodule_export]
+    use super::description::{Field, Parameter, ParameterLocation, Schema};
 }

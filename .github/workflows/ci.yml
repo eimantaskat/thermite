@@ -73,12 +73,26 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
-      - run: cargo llvm-cov --workspace --all-features --no-report
-      - run: cargo llvm-cov report --lcov --output-path lcov.info
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+      # one environment for both, since the Python front-end only runs under pytest
+      - run: cargo llvm-cov show-env >> "$GITHUB_ENV"
+      - run: cargo llvm-cov clean --workspace
+      - run: cargo test --workspace --all-features
+      - name: Run pytest
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          pip install "maturin>=1.16,<2" pytest
+          maturin develop -m crates/thermite-py/Cargo.toml
+          cd crates/thermite-py
+          pytest
+      - run: cargo llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex benchmarks
       - name: Write coverage summary
         run: |
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          cargo llvm-cov report --summary-only >> "$GITHUB_STEP_SUMMARY"
+          cargo llvm-cov report --summary-only --ignore-filename-regex benchmarks >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:
