@@ -1,5 +1,7 @@
 mod app;
 mod description;
+mod route;
+mod server;
 
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
@@ -15,4 +17,8 @@ mod _thermite {
     use super::app::CoreApp;
     #[pymodule_export]
     use super::description::{Field, Parameter, ParameterLocation, Schema};
+    #[pymodule_export]
+    use super::route::Respond;
+    #[pymodule_export]
+    use super::server::{PythonServer, TestServer};
 }

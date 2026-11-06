@@ -14,10 +14,12 @@ test = false
 doctest = false
 
 [dependencies]
+bytes.workspace = true
 http.workspace = true
 pyo3.workspace = true
 serde_json.workspace = true
 thermite-core.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 
 [lints]
 workspace = true

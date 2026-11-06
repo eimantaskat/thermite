@@ -1142,10 +1142,12 @@ dependencies = [
 name = "thermite-py"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "http",
  "pyo3",
  "serde_json",
  "thermite-core",
+ "tokio",
 ]
 
 [[package]]

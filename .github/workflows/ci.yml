@@ -57,7 +57,7 @@ jobs:
           enable-cache: true
       - uses: Swatinem/rust-cache@v2
       - run: uv sync --no-editable
-      - run: uv run --no-sync pytest --cov
+      - run: uv run --no-sync pytest
 
   python-check:
     runs-on: ubuntu-latest
@@ -68,6 +68,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.3.0
         with:
+          python-version: "3.14"
           enable-cache: true
       - uses: Swatinem/rust-cache@v2
       - run: uv sync
@@ -76,6 +77,8 @@ jobs:
       - run: uv run --no-sync mypy
       # compares the hand-written stub with the built module
       - run: uv run --no-sync python -m mypy.stubtest thermite._thermite
+      # before 3.14 coverage cannot see handlers running on tokio's threads
+      - run: uv run --no-sync pytest --cov
 
   # each benchmark runs once, so one that no longer sets up fails here rather than in a timing run
   benches:

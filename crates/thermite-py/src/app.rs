@@ -1,17 +1,22 @@
+use std::sync::Arc;
+
 use http::{Method, StatusCode, Uri};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use thermite_core::{
-    Arguments, Docs, OpenApi, Request, Response, ResponseDescription, RouteDescription, Router,
+    Docs, OpenApi, Request, Response, ResponseDescription, RouteDescription, Router,
 };
 
 use crate::RouteError;
 use crate::description::{Parameter, Schema};
+use crate::route::PythonRoute;
+use crate::server::{PythonServer, ServedApp, TestServer};
 
 #[pyclass(module = "thermite._thermite")]
 #[derive(Debug, Default)]
 pub(crate) struct CoreApp {
-    router: Router,
+    // shared with what serves the app, and only written to while nothing does
+    router: Arc<Router>,
 }
 
 #[pymethods]
@@ -21,6 +26,7 @@ impl CoreApp {
         Self::default()
     }
 
+    #[allow(clippy::too_many_arguments)] // mirrors what the Python side has read from a handler
     fn add_route(
         &mut self,
         method: &str,
@@ -29,12 +35,18 @@ impl CoreApp {
         parameters: Vec<Parameter>,
         body: Option<Schema>,
         response: Option<Schema>,
+        route: Py<PyAny>,
     ) -> PyResult<()> {
+        let router = Arc::get_mut(&mut self.router).ok_or_else(|| {
+            RouteError::new_err(format!(
+                "cannot add `{path}` while the app is being served or a TestClient holds it"
+            ))
+        })?;
         let method = Method::from_bytes(method.as_bytes())
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
         let mut description = RouteDescription::new(method, path).with_name(name);
-        for parameter in parameters {
-            description = description.parameter(parameter.0);
+        for parameter in &parameters {
+            description = description.parameter(parameter.description.clone());
         }
         if let Some(body) = body {
             description = description.body(body.0);
@@ -45,9 +57,17 @@ impl CoreApp {
                     .with_schema(response.0),
             );
         }
-        self.router
-            .route(description, not_implemented)
+        router
+            .route(description, PythonRoute::new(route, parameters))
             .map_err(|error| RouteError::new_err(error.to_string()))
+    }
+
+    fn server(&self, host: &str, port: u16) -> PyResult<PythonServer> {
+        Ok(PythonServer::new(self.served()?, host, port))
+    }
+
+    fn test_server(&self) -> PyResult<TestServer> {
+        TestServer::new(self.served()?)
     }
 
     fn openapi_json(&self) -> PyResult<String> {
@@ -63,9 +83,8 @@ impl CoreApp {
     }
 }
 
-// what a route answers until step 24 calls the Python handler
-async fn not_implemented(_request: Request, _arguments: Arguments) -> Response {
-    let mut response = Response::default();
-    *response.status_mut() = StatusCode::NOT_IMPLEMENTED;
-    response
+impl CoreApp {
+    fn served(&self) -> PyResult<ServedApp> {
+        ServedApp::new(Arc::clone(&self.router))
+    }
 }

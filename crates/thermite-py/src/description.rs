@@ -87,18 +87,28 @@ pub(crate) enum ParameterLocation {
 
 #[pyclass(frozen, from_py_object, module = "thermite._thermite")]
 #[derive(Debug, Clone)]
-pub(crate) struct Parameter(pub(crate) core::Parameter);
+pub(crate) struct Parameter {
+    pub(crate) argument: String,
+    pub(crate) location: core::ParameterLocation,
+    pub(crate) name: String,
+    pub(crate) description: core::Parameter,
+}
 
 #[pymethods]
 impl Parameter {
     #[new]
-    fn new(location: ParameterLocation, field: Field) -> Self {
+    fn new(argument: String, location: ParameterLocation, field: Field) -> Self {
         let location = match location {
             ParameterLocation::Path => core::ParameterLocation::Path,
             ParameterLocation::Query => core::ParameterLocation::Query,
             ParameterLocation::Header => core::ParameterLocation::Header,
             ParameterLocation::Cookie => core::ParameterLocation::Cookie,
         };
-        Self(core::Parameter::new(location, field.0))
+        Self {
+            argument,
+            location,
+            name: field.0.name().to_owned(),
+            description: core::Parameter::new(location, field.0),
+        }
     }
 }

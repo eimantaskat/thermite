@@ -5,8 +5,11 @@ __all__ = [
     "Field",
     "Parameter",
     "ParameterLocation",
+    "Respond",
     "RouteError",
     "Schema",
+    "Server",
+    "TestServer",
 ]
 
 class RouteError(Exception): ...
@@ -48,7 +51,9 @@ class ParameterLocation:
 
 @final
 class Parameter:
-    def __new__(cls, location: ParameterLocation, field: Field) -> Parameter: ...
+    def __new__(
+        cls, argument: str, location: ParameterLocation, field: Field
+    ) -> Parameter: ...
 
 @final
 class CoreApp:
@@ -61,5 +66,28 @@ class CoreApp:
         parameters: list[Parameter],
         body: Schema | None,
         response: Schema | None,
+        route: object,
     ) -> None: ...
+    def server(self, host: str, port: int) -> Server: ...
+    def test_server(self) -> TestServer: ...
     def openapi_json(self) -> str: ...
+
+@final
+class Respond:
+    def succeed(self, body: bytes) -> None: ...
+    def fail(self, error: BaseException) -> None: ...
+
+@final
+class Server:
+    def serve(self) -> None: ...
+    def request_shutdown(self) -> None: ...
+
+@final
+class TestServer:
+    def send(
+        self,
+        method: str,
+        target: str,
+        headers: list[tuple[str, str]],
+        body: bytes,
+    ) -> tuple[int, list[tuple[str, str]], bytes, BaseException | None]: ...
