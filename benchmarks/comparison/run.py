@@ -219,7 +219,7 @@ def main():
     parser.add_argument("--thermite", help="the built comparison example")
     parser.add_argument("--axum", help="the built axum-comparison binary")
     parser.add_argument("--python", help="a Python with requirements.txt installed, for FastAPI")
-    parser.add_argument("--cores", default="0-3", help="cores for the multi-core run, as taskset takes them")
+    parser.add_argument("--cores", default="0-7", help="CPUs for the multi-core run, as taskset takes them")
     parser.add_argument("--load-cores", default="8-15", help="cores for oha")
     parser.add_argument("--connections", type=int, default=64)
     parser.add_argument("--duration", type=int, default=10, help="seconds measured per case")
@@ -230,7 +230,7 @@ def main():
         parser.error("give at least two of --thermite, --axum and --python")
 
     first_core = arguments.cores.split(",")[0].split("-")[0]
-    runs = [("One core", first_core, 1), (f"{core_count(arguments.cores)} cores", arguments.cores, core_count(arguments.cores))]
+    runs = [("One core", first_core, 1), (f"CPUs {arguments.cores}", arguments.cores, core_count(arguments.cores))]
     expected = check_same_answers(servers(arguments, first_core, 1))
 
     with tempfile.TemporaryDirectory() as directory:
