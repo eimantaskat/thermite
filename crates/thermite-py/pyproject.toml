@@ -56,6 +56,9 @@ files = ["python"]
 
 [tool.coverage.run]
 source_pkgs = ["thermite"]
+# workers run in spawned processes, and each writes its own data file
+concurrency = ["multiprocessing", "thread"]
+parallel = true
 
 [tool.coverage.report]
 show_missing = true

@@ -8,6 +8,7 @@ from typing import TypeVar
 from thermite._route import AsyncRoute, SyncRoute, is_async
 from thermite._signature import describe_handler
 from thermite._thermite import CoreApp, TestServer
+from thermite._workers import run_workers
 
 Handler = TypeVar("Handler", bound=Callable[..., object])
 
@@ -44,12 +45,15 @@ class App:
         document: dict[str, object] = json.loads(self._core.openapi_json())
         return document
 
-    def run(self, host: str = "127.0.0.1", port: int = 8000) -> None:
-        asyncio.run(self._serve(host, port))
+    def run(self, host: str = "127.0.0.1", port: int = 8000, workers: int = 1) -> None:
+        if workers == 1:
+            asyncio.run(self._serve(host, port))
+        else:
+            run_workers(self, host, port, workers)
 
     async def _serve(self, host: str, port: int) -> None:
         loop = asyncio.get_running_loop()
-        server = self._core.server(host, port, loop)
+        server = self._core.server(loop)
 
         def request_shutdown(_signal: int, _frame: FrameType | None) -> None:
             server.request_shutdown()
@@ -59,7 +63,7 @@ class App:
             for handled in (signal.SIGINT, signal.SIGTERM)
         }
         try:
-            serving = loop.run_in_executor(None, server.serve)
+            serving = loop.run_in_executor(None, server.serve, host, port)
             # a signal handler runs once this thread wakes, which not all signals cause
             while not serving.done():
                 await asyncio.wait([serving], timeout=0.1)

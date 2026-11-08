@@ -44,6 +44,8 @@ const DEFAULT_BODY_LIMIT: usize = 2 * 1024 * 1024;
 pub enum ServerError {
     #[error("could not bind to {address}")]
     Bind { address: String, source: io::Error },
+    #[error("could not serve on the given listener")]
+    Listener(#[source] io::Error),
     #[error("could not read the bound address")]
     LocalAddress(#[source] io::Error),
     #[error("the app failed to start")]
@@ -67,12 +69,26 @@ impl Server {
                 address: shown_address,
                 source,
             })?;
-        Ok(Self {
+        Ok(Self::on(listener))
+    }
+
+    // for a listener made elsewhere, such as one shared between processes
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)] // tokio panics outside a runtime, which being async rules out
+    pub async fn from_std(listener: std::net::TcpListener) -> Result<Self, ServerError> {
+        listener
+            .set_nonblocking(true)
+            .map_err(ServerError::Listener)?;
+        let listener = TcpListener::from_std(listener).map_err(ServerError::Listener)?;
+        Ok(Self::on(listener))
+    }
+
+    fn on(listener: TcpListener) -> Self {
+        Self {
             listener,
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
             header_read_timeout: DEFAULT_HEADER_READ_TIMEOUT,
             body_limit: DEFAULT_BODY_LIMIT,
-        })
+        }
     }
 
     #[must_use]

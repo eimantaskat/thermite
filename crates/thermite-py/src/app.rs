@@ -70,8 +70,8 @@ impl CoreApp {
             .map_err(|error| RouteError::new_err(error.to_string()))
     }
 
-    fn server(&self, host: &str, port: u16, event_loop: Py<PyAny>) -> PyResult<PythonServer> {
-        Ok(PythonServer::new(self.served(event_loop)?, host, port))
+    fn server(&self, event_loop: Py<PyAny>) -> PyResult<PythonServer> {
+        Ok(PythonServer::new(self.served(event_loop)?))
     }
 
     fn test_server(&self, event_loop: Py<PyAny>) -> PyResult<TestServer> {

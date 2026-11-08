@@ -27,8 +27,8 @@ def fetch(port, path, host="127.0.0.1"):
         connection.close()
 
 
-def fetch_when_ready(port, path, host="127.0.0.1"):
-    deadline = time.monotonic() + 5
+def fetch_when_ready(port, path, host="127.0.0.1", timeout=5):
+    deadline = time.monotonic() + timeout
     while True:
         try:
             return fetch(port, path, host)

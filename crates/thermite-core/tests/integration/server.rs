@@ -306,6 +306,30 @@ async fn accepts_bodies_up_to_2_mib_by_default() -> TestResult {
 }
 
 #[tokio::test]
+async fn serves_on_a_listener_made_elsewhere() -> TestResult {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+
+    let server = Server::from_std(listener).await?;
+
+    assert_eq!(server.local_address()?, address);
+    let shutdown = Arc::new(Notify::new());
+    let requested = Arc::clone(&shutdown);
+    let serving = tokio::spawn(server.serve_with_shutdown(
+        |_request: Request| async { text_response(StatusCode::OK, "ok") },
+        move || {
+            let requested = Arc::clone(&requested);
+            async move { requested.notified().await }
+        },
+    ));
+    let response = reqwest::get(format!("http://{address}/")).await?;
+    assert_eq!(response.text().await?, "ok");
+    shutdown.notify_one();
+    serving.await??;
+    Ok(())
+}
+
+#[tokio::test]
 async fn releases_its_port_after_shutting_down() -> TestResult {
     let server =
         RunningServer::start(|_request: Request| async { text_response(StatusCode::OK, "") })

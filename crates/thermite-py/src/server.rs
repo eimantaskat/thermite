@@ -1,9 +1,10 @@
 use std::future::Future;
 use std::mem::ManuallyDrop;
+use std::net::TcpListener;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use pyo3::exceptions::{PyOSError, PyValueError};
+use pyo3::exceptions::{PyOSError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use thermite_core::{
@@ -48,41 +49,86 @@ impl RequestHandler for ServedApp {
 #[derive(Debug)]
 pub(crate) struct PythonServer {
     app: ServedApp,
-    address: String,
     shutdown: Arc<Notify>,
 }
 
 impl PythonServer {
-    pub(crate) fn new(app: ServedApp, host: &str, port: u16) -> Self {
-        let address = if host.contains(':') {
-            format!("[{host}]:{port}")
-        } else {
-            format!("{host}:{port}")
-        };
+    pub(crate) fn new(app: ServedApp) -> Self {
         Self {
             app,
-            address,
             shutdown: Arc::new(Notify::new()),
         }
     }
-}
 
-#[pymethods]
-impl PythonServer {
-    fn serve(&self, py: Python<'_>) -> PyResult<()> {
+    fn run(
+        &self,
+        py: Python<'_>,
+        server: impl Future<Output = Result<Server, ServerError>> + Send,
+    ) -> PyResult<()> {
         py.detach(|| {
             let runtime = Builder::new_multi_thread().enable_all().build()?;
-            let served = runtime.block_on(async {
-                let server = Server::bind(self.address.as_str()).await?;
+            let outcome = runtime.block_on(async {
                 let requested = || async { self.shutdown.notified().await };
                 server
+                    .await?
                     .serve_with_shutdown(self.app.clone(), requested)
                     .await
             });
             // the server already waited as long as it will, so a handler still running is abandoned
             runtime.shutdown_background();
-            served.map_err(|error: ServerError| PyOSError::new_err(error.to_string()))
+            outcome.map_err(|error: ServerError| PyOSError::new_err(error.to_string()))
         })
+    }
+}
+
+// takes the socket away from Python, which then no longer closes it
+fn take_listener(socket: &Bound<'_, PyAny>) -> PyResult<TcpListener> {
+    let socket_type = socket.py().import("socket")?.getattr("socket")?;
+    if !socket.is_instance(&socket_type)? {
+        return Err(PyTypeError::new_err("expected a socket.socket"));
+    }
+    // a closed socket detaches as -1
+    let raw: u64 = socket
+        .call_method0("detach")?
+        .extract()
+        .map_err(|_| PyValueError::new_err("the socket is closed"))?;
+    listener_from_detached(raw)
+}
+
+#[cfg(unix)]
+fn listener_from_detached(raw: u64) -> PyResult<TcpListener> {
+    use std::os::fd::{FromRawFd, RawFd};
+
+    let descriptor = RawFd::try_from(raw)?;
+    // SAFETY: `detach` gave up the open descriptor it returned, so this is its only owner
+    #[allow(unsafe_code)] // the only way to take a socket over from Python
+    Ok(unsafe { TcpListener::from_raw_fd(descriptor) })
+}
+
+#[cfg(windows)]
+#[allow(clippy::unnecessary_wraps)] // the same signature as on Unix, where it can fail
+fn listener_from_detached(raw: u64) -> PyResult<TcpListener> {
+    use std::os::windows::io::FromRawSocket;
+
+    // SAFETY: `detach` gave up the open socket it returned, so this is its only owner
+    #[allow(unsafe_code)] // the only way to take a socket over from Python
+    Ok(unsafe { TcpListener::from_raw_socket(raw) })
+}
+
+#[pymethods]
+impl PythonServer {
+    fn serve(&self, py: Python<'_>, host: &str, port: u16) -> PyResult<()> {
+        let address = if host.contains(':') {
+            format!("[{host}]:{port}")
+        } else {
+            format!("{host}:{port}")
+        };
+        self.run(py, async move { Server::bind(address).await })
+    }
+
+    fn serve_socket(&self, py: Python<'_>, socket: &Bound<'_, PyAny>) -> PyResult<()> {
+        let listener = take_listener(socket)?;
+        self.run(py, Server::from_std(listener))
     }
 
     fn request_shutdown(&self) {
