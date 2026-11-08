@@ -80,13 +80,13 @@ class App:
             described = describe_handler(handler, path)
             on_event_loop = is_async(handler)
             kind = AsyncRoute if on_event_loop else SyncRoute
-            route = kind(handler, described.body, described.name)
+            route = kind(handler, described.name)
             self._core.add_route(
                 method,
                 path,
                 described.name,
                 described.parameters,
-                described.body_schema,
+                described.body,
                 described.response,
                 route,
                 on_event_loop,

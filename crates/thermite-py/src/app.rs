@@ -8,9 +8,10 @@ use thermite_core::{
 };
 
 use crate::RouteError;
+use crate::body::Body;
 use crate::description::{Parameter, Schema};
 use crate::event_loop::EventLoopQueue;
-use crate::route::{Dispatch, PythonRoute};
+use crate::route::{PythonRoute, RunsOn};
 use crate::server::{PythonServer, ServedApp, TestServer};
 
 #[pyclass(module = "thermite._thermite")]
@@ -35,7 +36,7 @@ impl CoreApp {
         path: &str,
         name: &str,
         parameters: Vec<Parameter>,
-        body: Option<Schema>,
+        body: Option<Bound<'_, Body>>,
         response: Option<Schema>,
         route: Py<PyAny>,
         on_event_loop: bool,
@@ -51,8 +52,9 @@ impl CoreApp {
         for parameter in &parameters {
             description = description.parameter(parameter.description.clone());
         }
+        let plan = body.as_ref().map(|body| Arc::clone(&body.get().plan));
         if let Some(body) = body {
-            description = description.body(body.0);
+            description = description.body(body.get().schema.0.clone());
         }
         if let Some(response) = response {
             description = description.response(
@@ -60,13 +62,20 @@ impl CoreApp {
                     .with_schema(response.0),
             );
         }
-        let dispatch = if on_event_loop {
-            Dispatch::EventLoop(Arc::clone(&self.event_loop_queue))
+        let runs_on = if on_event_loop {
+            RunsOn::EventLoop
         } else {
-            Dispatch::BlockingPool
+            RunsOn::BlockingPool
         };
+        let route = PythonRoute::new(
+            route,
+            parameters,
+            plan,
+            runs_on,
+            Arc::clone(&self.event_loop_queue),
+        );
         router
-            .route(description, PythonRoute::new(route, parameters, dispatch))
+            .route(description, route)
             .map_err(|error| RouteError::new_err(error.to_string()))
     }
 

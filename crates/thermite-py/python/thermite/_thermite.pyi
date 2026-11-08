@@ -1,14 +1,18 @@
 from typing import ClassVar, final
 
 __all__ = [
+    "Body",
     "CoreApp",
     "Field",
+    "FieldShape",
+    "ModelShape",
     "Parameter",
     "ParameterLocation",
     "Respond",
     "RouteError",
     "Schema",
     "Server",
+    "Shape",
     "TestServer",
 ]
 
@@ -56,6 +60,29 @@ class Parameter:
     ) -> Parameter: ...
 
 @final
+class Shape:
+    @staticmethod
+    def any() -> Shape: ...
+    @staticmethod
+    def list(item: Shape) -> Shape: ...
+    @staticmethod
+    def model(index: int) -> Shape: ...
+
+@final
+class FieldShape:
+    def __new__(cls, name: str, shape: Shape, keyword_only: bool) -> FieldShape: ...
+
+@final
+class ModelShape:
+    def __new__(cls, model: type, fields: list[FieldShape]) -> ModelShape: ...
+
+@final
+class Body:
+    def __new__(
+        cls, argument: str, schema: Schema, shape: Shape, models: list[ModelShape]
+    ) -> Body: ...
+
+@final
 class CoreApp:
     def __new__(cls) -> CoreApp: ...
     def add_route(
@@ -64,7 +91,7 @@ class CoreApp:
         path: str,
         name: str,
         parameters: list[Parameter],
-        body: Schema | None,
+        body: Body | None,
         response: Schema | None,
         route: object,
         on_event_loop: bool,

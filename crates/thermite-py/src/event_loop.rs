@@ -2,11 +2,16 @@ use std::fmt;
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 
-pub(crate) type Job = Box<dyn for<'py> FnOnce(Python<'py>) + Send>;
+// how long the jobs of one drain may take together before they pause, so others on the loop get a turn
+const TURN: Duration = Duration::from_micros(500);
+
+// told when the drain's turn ends
+pub(crate) type Job = Box<dyn for<'py> FnOnce(Python<'py>, Instant) + Send>;
 
 // hands work to the event loop's thread without the GIL, so a tokio worker never waits for it
 #[derive(Default)]
@@ -44,6 +49,11 @@ impl EventLoopQueue {
         }
     }
 
+    // for a job pushed while the queue drains, on the event loop's thread, which the next drain then runs
+    pub(crate) fn requeue(&self, job: Job) {
+        self.lock_waiting().push(job);
+    }
+
     fn drain(self: &Arc<Self>, py: Python<'_>) {
         let jobs = mem::take(&mut *self.lock_waiting());
         if jobs.is_empty() {
@@ -55,8 +65,9 @@ impl EventLoopQueue {
             }
             return;
         }
+        let turn_ends = Instant::now() + TURN;
         for job in jobs {
-            job(py);
+            job(py, turn_ends);
         }
         self.schedule(py, "call_soon");
     }

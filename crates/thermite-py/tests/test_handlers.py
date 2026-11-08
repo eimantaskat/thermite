@@ -1,7 +1,9 @@
 import asyncio
 import functools
 import gc
+import inspect
 import logging
+import sys
 import threading
 import weakref
 from concurrent.futures import ThreadPoolExecutor
@@ -323,6 +325,20 @@ def test_a_failed_async_handler_answers_500():
         raise ValueError("boom")
 
     client = client_for(raises, raise_server_exceptions=False)
+
+    assert client.get("/items").status_code == 500
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 12), reason="markcoroutinefunction is new in 3.12"
+)
+def test_a_handler_marked_async_that_gives_no_coroutine_answers_500():
+    def not_a_coroutine():
+        return "plain"
+
+    client = client_for(
+        inspect.markcoroutinefunction(not_a_coroutine), raise_server_exceptions=False
+    )
 
     assert client.get("/items").status_code == 500
 

@@ -5,8 +5,8 @@ import typing
 from collections.abc import Callable
 from typing import Annotated
 
+from thermite._body import body_of
 from thermite._markers import Marker, is_marker
-from thermite._route import BodyArgument, decoder_of
 from thermite._schema import (
     NO_DEFAULT,
     field_of,
@@ -14,18 +14,16 @@ from thermite._schema import (
     schema_of,
     split_none,
 )
-from thermite._thermite import Parameter, ParameterLocation, RouteError, Schema
+from thermite._thermite import Body, Parameter, ParameterLocation, RouteError, Schema
 
 _PATH_PARAMETER = re.compile(r"\{([^{}]*)\}")
-_NO_BODY: tuple[BodyArgument | None, Schema | None] = (None, None)
 
 
 @dataclasses.dataclass(frozen=True)
 class HandlerDescription:
     name: str
     parameters: list[Parameter]
-    body: BodyArgument | None
-    body_schema: Schema | None
+    body: Body | None
     response: Schema | None
 
 
@@ -48,16 +46,15 @@ def describe_handler(handler: Callable[..., object], path: str) -> HandlerDescri
         if isinstance(described, Parameter):
             parameters.append(described)
         else:
-            argument = BodyArgument(parameter.name, decoder_of(parameter.annotation))
-            bodies.append((argument, described))
+            bodies.append(body_of(parameter.name, parameter.annotation, described))
     if len(bodies) > 1:
         raise RouteError(f"handler `{name}` declares more than one body")
-    body, body_schema = bodies[0] if bodies else _NO_BODY
+    body = bodies[0] if bodies else None
     try:
         response = _describe_response(signature.return_annotation)
     except RouteError as error:
         raise RouteError(f"return type of `{name}`: {error}") from error
-    return HandlerDescription(name, parameters, body, body_schema, response)
+    return HandlerDescription(name, parameters, body, response)
 
 
 def _describe_parameter(
