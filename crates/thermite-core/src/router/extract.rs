@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -14,28 +15,58 @@ use crate::handler::Request;
 use crate::parse::{decode_latin1, parse_cookies, parse_query};
 use crate::validation::{ErrorKind, Location, ValidationError, collect_all};
 
+// what the body gave, read on its own so that a large one can be read away from the other requests
+#[derive(Default)]
+pub(super) struct ReadBody {
+    decoded: Option<Box<dyn Any + Send>>,
+    validated: Option<Result<Value, Vec<ValidationError>>>,
+}
+
+pub(super) fn read_body(
+    inputs: &Inputs,
+    body: &[u8],
+    is_json: bool,
+) -> Result<ReadBody, Vec<ValidationError>> {
+    let Some(schema) = &inputs.body else {
+        return Ok(ReadBody::default());
+    };
+    // a decoded body is valid, so only the parameters are left to report
+    let decoded = inputs
+        .decoder
+        .as_ref()
+        .filter(|_| !body.is_empty() && is_json)
+        .and_then(|decoder| decoder.decode(body));
+    if decoded.is_some() {
+        return Ok(ReadBody {
+            decoded,
+            validated: None,
+        });
+    }
+    // like FastAPI, a body that is not JSON fails on its own, before any parameter is checked
+    let location = Location::root("body");
+    let validated = match parse_body(body, is_json)? {
+        Some(input) => schema.validate(input, &location),
+        None => Err(vec![ValidationError::new(
+            ErrorKind::Missing,
+            &location,
+            Value::Null,
+        )]),
+    };
+    Ok(ReadBody {
+        decoded: None,
+        validated: Some(validated),
+    })
+}
+
 pub(super) fn extract_arguments(
     inputs: &Inputs,
     path_parameters: &PathParameters<'_, '_>,
     request: &Request,
+    body: ReadBody,
 ) -> Result<Arguments, Vec<ValidationError>> {
     if inputs.parameters.is_empty() && inputs.body.is_none() {
         return Ok(Arguments::default());
     }
-    // a decoded body is valid, so only the parameters are left to report
-    let decoded_body = inputs
-        .decoder
-        .as_ref()
-        .filter(|_| !request.body().is_empty() && declares_json(request))
-        .and_then(|decoder| decoder.decode(request.body()));
-    // like FastAPI, a body that is not JSON fails on its own, before any parameter is checked
-    let body = inputs
-        .body
-        .as_ref()
-        .filter(|_| decoded_body.is_none())
-        .map(|schema| read_body(request).map(|input| (schema, input)))
-        .transpose()?;
-
     let query = parse_query(request.uri().query().unwrap_or(""));
     let reads_cookies = inputs
         .parameters
@@ -71,25 +102,13 @@ pub(super) fn extract_arguments(
     };
     let (before_body, after_body) = inputs.parameters.split_at(inputs.body_position);
     let before_body = validate(before_body);
-    let body = body
-        .map(|(schema, input)| {
-            let location = Location::root("body");
-            match input {
-                Some(input) => schema.validate(input, &location),
-                None => Err(vec![ValidationError::new(
-                    ErrorKind::Missing,
-                    &location,
-                    Value::Null,
-                )]),
-            }
-        })
-        .transpose();
+    let validated = body.validated.transpose();
     let after_body = validate(after_body);
 
-    match (before_body, body, after_body) {
-        (Ok(mut parameters), Ok(body), Ok(after_body)) => {
+    match (before_body, validated, after_body) {
+        (Ok(mut parameters), Ok(validated), Ok(after_body)) => {
             parameters.extend(after_body);
-            Ok(Arguments::new(parameters, body, decoded_body))
+            Ok(Arguments::new(parameters, validated, body.decoded))
         }
         (before_body, body, after_body) => Err(before_body
             .err()
@@ -150,12 +169,11 @@ fn list(values: impl Iterator<Item = Value>) -> Option<Value> {
 }
 
 // FastAPI parses the body as JSON when the content type says JSON or is missing, and passes it on as text otherwise
-fn read_body(request: &Request) -> Result<Option<Value>, Vec<ValidationError>> {
-    let body = request.body();
+fn parse_body(body: &[u8], is_json: bool) -> Result<Option<Value>, Vec<ValidationError>> {
     if body.is_empty() {
         return Ok(None);
     }
-    if !declares_json(request) {
+    if !is_json {
         return Ok(Some(Value::String(
             String::from_utf8_lossy(body).into_owned(),
         )));
@@ -165,7 +183,7 @@ fn read_body(request: &Request) -> Result<Option<Value>, Vec<ValidationError>> {
         .map_err(|error| vec![json_invalid(body, &error)])
 }
 
-fn declares_json(request: &Request) -> bool {
+pub(super) fn declares_json(request: &Request) -> bool {
     // FastAPI checks `if not content_type`, so an empty header counts as missing
     let Some(content_type) = request
         .headers()
@@ -266,7 +284,17 @@ mod tests {
         description: &RouteDescription,
         request: &Request,
     ) -> Result<Arguments, Vec<ValidationError>> {
-        extract_arguments(&inputs(description), &PathParameters::default(), request)
+        extract_at(description, &PathParameters::default(), request)
+    }
+
+    fn extract_at(
+        description: &RouteDescription,
+        path_parameters: &PathParameters<'_, '_>,
+        request: &Request,
+    ) -> Result<Arguments, Vec<ValidationError>> {
+        let inputs = inputs(description);
+        let body = read_body(&inputs, request.body(), declares_json(request))?;
+        extract_arguments(&inputs, path_parameters, request, body)
     }
 
     // takes a JSON integer as it is, and gives up on anything validation would coerce or reject
@@ -545,8 +573,8 @@ mod tests {
             .body(Schema::string());
         let path_parameters = PathParameters::from_pairs([("id", "x")]);
 
-        let errors = extract_arguments(
-            &inputs(&description),
+        let errors = extract_at(
+            &description,
             &path_parameters,
             &request("/items/x", None, ""),
         );

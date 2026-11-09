@@ -4,6 +4,7 @@ mod path;
 mod table;
 
 use std::future::Future;
+use std::panic::resume_unwind;
 use std::sync::Arc;
 
 use http::header::ALLOW;
@@ -13,16 +14,17 @@ use crate::arguments::Arguments;
 use crate::description::{Parameter, ResponseDescription, RouteDescription};
 use crate::handler::{Endpoint, Request, RequestHandler, Response, RouteHandler};
 use crate::http_error::HttpError;
+use crate::response::internal_server_error;
 use crate::route_error::RouteError;
 use crate::schema::Schema;
 use crate::security::SecuritySchemeDescription;
-use crate::validation::validation_failed;
+use crate::validation::{ValidationError, validation_failed};
 use crate::websocket::{
     AcceptKey, BoxedWebSocketHandler, WebSocketHandler, check_handshake, is_handshake, open,
     refusal,
 };
 use check::{Checked, Inputs, check_description};
-use extract::extract_arguments;
+use extract::{ReadBody, declares_json, extract_arguments, read_body};
 use path::PathPattern;
 use table::{Lookup, RouteTable};
 
@@ -33,10 +35,14 @@ pub struct Router {
     websockets: RouteTable<WebSocketRoute>,
 }
 
+// a body this large takes long enough to read that the other requests on its worker would wait for it
+const LARGE_BODY: usize = 64 * 1024;
+
 struct Route {
     name: Option<String>,
     tags: Vec<String>,
-    inputs: Inputs,
+    // shared with the thread that reads a large body
+    inputs: Arc<Inputs>,
     responses: Vec<ResponseDescription>,
     security: Vec<SecuritySchemeDescription>,
     endpoint: Box<dyn Endpoint>,
@@ -107,7 +113,7 @@ impl Router {
             Route {
                 name,
                 tags,
-                inputs,
+                inputs: Arc::new(inputs),
                 responses,
                 security,
                 endpoint: Box::new(handler),
@@ -159,7 +165,7 @@ impl Router {
             .collect()
     }
 
-    fn dispatch(&self, request: &Request) -> Dispatch<'_> {
+    async fn dispatch(&self, request: &Request) -> Dispatch<'_> {
         if is_handshake(request) {
             return self.dispatch_websocket(request);
         }
@@ -167,10 +173,17 @@ impl Router {
             Lookup::Found {
                 value: route,
                 parameters,
-            } => match extract_arguments(&route.inputs, &parameters, request) {
-                Ok(arguments) => Dispatch::Endpoint(route.endpoint.as_ref(), arguments),
-                Err(errors) => Dispatch::Respond(validation_failed(errors)),
-            },
+            } => {
+                let Some(body) = read_request_body(&route.inputs, request).await else {
+                    return Dispatch::Respond(internal_server_error());
+                };
+                match body
+                    .and_then(|body| extract_arguments(&route.inputs, &parameters, request, body))
+                {
+                    Ok(arguments) => Dispatch::Endpoint(route.endpoint.as_ref(), arguments),
+                    Err(errors) => Dispatch::Respond(validation_failed(errors)),
+                }
+            }
             Lookup::MethodNotAllowed { allowed } => Dispatch::Respond(method_not_allowed(&allowed)),
             Lookup::NotFound => Dispatch::Respond(
                 HttpError::new(StatusCode::NOT_FOUND, "Not Found").into_response(),
@@ -191,29 +204,33 @@ impl Router {
             Lookup::Found {
                 value: route,
                 parameters,
-            } => match extract_arguments(&route.inputs, &parameters, request) {
-                Ok(arguments) => Dispatch::WebSocket(&route.handler, arguments, key),
-                // FastAPI closes with 1008 before accepting, which uvicorn answers with 403
-                Err(_) => Dispatch::Respond(refusal(StatusCode::FORBIDDEN)),
-            },
+            } => {
+                match extract_arguments(&route.inputs, &parameters, request, ReadBody::default()) {
+                    Ok(arguments) => Dispatch::WebSocket(&route.handler, arguments, key),
+                    // FastAPI closes with 1008 before accepting, which uvicorn answers with 403
+                    Err(_) => Dispatch::Respond(refusal(StatusCode::FORBIDDEN)),
+                }
+            }
             Lookup::MethodNotAllowed { .. } | Lookup::NotFound => {
                 Dispatch::Respond(refusal(StatusCode::FORBIDDEN))
             }
         }
     }
 
+    // the signature promises Send, which an async fn would leave to inference
     pub fn handle(&self, request: Request) -> impl Future<Output = Response> + Send + '_ {
-        let dispatch = self.dispatch(&request);
-        async move {
-            match dispatch {
-                Dispatch::Endpoint(endpoint, arguments) => {
-                    endpoint.call_boxed(request, arguments).await
-                }
-                Dispatch::WebSocket(handler, arguments, key) => {
-                    open(handler, request, arguments, key).await
-                }
-                Dispatch::Respond(response) => response,
+        self.respond(request)
+    }
+
+    async fn respond(&self, request: Request) -> Response {
+        match self.dispatch(&request).await {
+            Dispatch::Endpoint(endpoint, arguments) => {
+                endpoint.call_boxed(request, arguments).await
             }
+            Dispatch::WebSocket(handler, arguments, key) => {
+                open(handler, request, arguments, key).await
+            }
+            Dispatch::Respond(response) => response,
         }
     }
 }
@@ -222,6 +239,27 @@ impl RequestHandler for Router {
     fn call(self: &Arc<Self>, request: Request) -> impl Future<Output = Response> + Send + 'static {
         let router = Arc::clone(self);
         async move { router.handle(request).await }
+    }
+}
+
+// None when the runtime shut down before the body was read
+async fn read_request_body(
+    inputs: &Arc<Inputs>,
+    request: &Request,
+) -> Option<Result<ReadBody, Vec<ValidationError>>> {
+    let is_json = declares_json(request);
+    if inputs.body.is_none() || request.body().len() < LARGE_BODY {
+        return Some(read_body(inputs, request.body(), is_json));
+    }
+    let inputs = Arc::clone(inputs);
+    let body = request.body().clone();
+    match tokio::task::spawn_blocking(move || read_body(&inputs, &body, is_json)).await {
+        Ok(read) => Some(read),
+        // a decoder that panicked fails the request as it would have on the worker
+        Err(error) => match error.try_into_panic() {
+            Ok(payload) => resume_unwind(payload),
+            Err(_cancelled) => None,
+        },
     }
 }
 
