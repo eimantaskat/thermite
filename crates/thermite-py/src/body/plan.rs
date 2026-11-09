@@ -56,16 +56,18 @@ pub(crate) struct FieldShape {
     name: String,
     shape: Shape,
     keyword_only: bool,
+    has_default_factory: bool,
 }
 
 #[pymethods]
 impl FieldShape {
     #[new]
-    fn new(name: String, shape: Shape, keyword_only: bool) -> Self {
+    fn new(name: String, shape: Shape, keyword_only: bool, has_default_factory: bool) -> Self {
         Self {
             name,
             shape,
             keyword_only,
+            has_default_factory,
         }
     }
 }
@@ -98,6 +100,8 @@ pub(crate) struct FieldPlan {
     pub(crate) shape: ShapeKind,
     // None for a field passed by position
     pub(crate) keyword: Option<Py<PyString>>,
+    // validation leaves it out when missing, for the model's own default factory to fill
+    pub(crate) may_be_missing: bool,
 }
 
 // how to build the handler's body argument from a validated body
@@ -136,17 +140,22 @@ impl Body {
             .into_iter()
             .map(|model| {
                 let model = model.get();
+                // a field that may be missing leaves no place for the ones after it to go by position
+                let mut after_missing = false;
                 ModelPlan {
                     model: model.model.clone_ref(py),
                     fields: model
                         .fields
                         .iter()
-                        .map(|field| FieldPlan {
-                            name: field.name.clone(),
-                            shape: field.shape.0.clone(),
-                            keyword: field
-                                .keyword_only
-                                .then(|| PyString::intern(py, &field.name).unbind()),
+                        .map(|field| {
+                            after_missing |= field.has_default_factory;
+                            FieldPlan {
+                                name: field.name.clone(),
+                                shape: field.shape.0.clone(),
+                                keyword: (field.keyword_only || after_missing)
+                                    .then(|| PyString::intern(py, &field.name).unbind()),
+                                may_be_missing: field.has_default_factory,
+                            }
                         })
                         .collect(),
                 }

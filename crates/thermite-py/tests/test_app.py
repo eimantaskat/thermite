@@ -10,6 +10,7 @@ def test_the_package_exports_its_public_names():
         "Header",
         "Path",
         "Query",
+        "ResponseValidationError",
         "RouteError",
     ]
 

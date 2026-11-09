@@ -77,7 +77,7 @@ enum Frame {
     Model {
         model: ModelId,
         values: map::IntoIter,
-        // how many fields were taken, the last of which is being built
+        // how many fields were taken or found missing, the last of which is being built
         taken: usize,
         positional: Vec<Py<PyAny>>,
         keywords: Option<Py<PyDict>>,
@@ -142,17 +142,24 @@ impl Frame {
             } => {
                 let fields = &plan.model(*model).fields;
                 let Some((name, value)) = values.next() else {
-                    return if *taken == fields.len() {
+                    return if fields[*taken..].iter().all(|field| field.may_be_missing) {
                         Ok(None)
                     } else {
                         Err(unexpected_layout())
                     };
                 };
-                let Some(expected) = fields.get(*taken).filter(|field| field.name == name) else {
-                    return Err(unexpected_layout());
-                };
-                *taken += 1;
-                Some((value, expected.shape.clone()))
+                loop {
+                    let Some(expected) = fields.get(*taken) else {
+                        return Err(unexpected_layout());
+                    };
+                    *taken += 1;
+                    if expected.name == name {
+                        break Some((value, expected.shape.clone()));
+                    }
+                    if !expected.may_be_missing {
+                        return Err(unexpected_layout());
+                    }
+                }
             }
         })
     }
@@ -230,7 +237,7 @@ fn list(item: Arc<ShapeKind>, values: Vec<Value>) -> Frame {
     }
 }
 
-// validation gives a model exactly the fields its schema lists, in that order, which is the plan's
+// validation gives a model the fields its schema lists in that order, leaving out only missing ones with a factory
 fn unexpected_layout() -> PyErr {
     PyRuntimeError::new_err("the validated body does not have the fields of its model in order")
 }

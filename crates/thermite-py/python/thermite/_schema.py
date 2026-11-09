@@ -9,6 +9,8 @@ from typing import Annotated, Any, TypeGuard, Union
 from thermite._thermite import Field, RouteError, Schema
 
 NO_DEFAULT = inspect.Parameter.empty
+# a dataclass field whose default is made per request by its `default_factory`
+DEFAULT_FACTORY = object()
 
 _SCALARS: dict[object, Callable[[], Schema]] = {
     str: Schema.string,
@@ -48,6 +50,8 @@ def field_of(
                 "is not supported yet, so write `= None`"
             )
         return Field.required(name, schema)
+    if default is DEFAULT_FACTORY:
+        return Field.with_default_factory(name, schema)
     if default is None:
         return Field.optional(name, schema)
     # the core rejects a default that validating would change, and 1 becomes 1.0
@@ -105,7 +109,7 @@ def _field_default(field: dataclasses.Field[object]) -> object:
     if field.default is not dataclasses.MISSING:
         return field.default
     if field.default_factory is not dataclasses.MISSING:
-        return field.default_factory()
+        return DEFAULT_FACTORY
     return NO_DEFAULT
 
 

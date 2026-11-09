@@ -84,7 +84,7 @@ impl Field {
             Presence::Optional => {
                 entries([("anyOf", json!([Value::Object(schema), { "type": "null" }]))])
             }
-            Presence::Required | Presence::Default(_) => schema,
+            Presence::Required | Presence::Default(_) | Presence::DefaultFactory => schema,
         };
         // like pydantic, a reference stands for the model, which carries its own title
         if !schema.contains_key("$ref") {
@@ -198,6 +198,7 @@ mod tests {
             Field::new("name", Schema::string()),
             Field::new("size", Schema::integer()).optional(),
             Field::new("tags", Schema::array(Schema::boolean())).with_default(json!([true])),
+            Field::new("labels", Schema::array(Schema::string())).with_default_factory(),
         ]));
 
         assert_eq!(
@@ -211,7 +212,8 @@ mod tests {
                         "items": {"type": "boolean"},
                         "title": "Tags",
                         "type": "array"
-                    }
+                    },
+                    "labels": {"items": {"type": "string"}, "title": "Labels", "type": "array"}
                 },
                 "required": ["name"],
                 "type": "object"

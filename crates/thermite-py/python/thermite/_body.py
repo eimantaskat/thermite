@@ -38,6 +38,7 @@ def _model_index(
             field.name,
             _shape_of(hints[field.name], models, indices),
             field.kw_only is True,
+            field.default_factory is not dataclasses.MISSING,
         )
         for field in dataclasses.fields(model)
         if field.init

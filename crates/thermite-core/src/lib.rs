@@ -37,7 +37,7 @@ pub use security::{
 };
 pub use serde_json::Value;
 pub use server::{InProcessServer, InProcessWebSocket, Server, ServerError, WebSocketHandshake};
-pub use validation::RequestValidationError;
+pub use validation::{RequestValidationError, ResponseValidationError};
 pub use websocket::{
     CloseCode, Message, WebSocket, WebSocketConnection, WebSocketDisconnect, WebSocketHandler,
 };

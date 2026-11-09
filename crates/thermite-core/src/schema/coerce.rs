@@ -3,7 +3,9 @@ use std::mem;
 use serde_json::{Map, Number, Value};
 
 use super::{Field, Kind, Models, Presence, Schema};
-use crate::validation::{ErrorKind, Location, ValidationError, collect_all};
+use crate::validation::{
+    ErrorKind, Location, ResponseValidationError, ValidationError, collect_all,
+};
 
 pub(crate) type Validated = Result<Value, Vec<ValidationError>>;
 
@@ -16,6 +18,11 @@ enum Coerced {
 impl Schema {
     pub(crate) fn validate(&self, value: Value, location: &Location<'_>) -> Validated {
         self.validate_within(value, location, &Models::default())
+    }
+
+    pub fn validate_response(&self, value: Value) -> Result<Value, ResponseValidationError> {
+        self.validate(value, &Location::root("response"))
+            .map_err(ResponseValidationError::new)
     }
 
     pub(super) fn validate_within(
@@ -68,7 +75,8 @@ impl Field {
         models: &Models<'_>,
     ) -> Validated {
         match (value, &self.presence) {
-            (None, Presence::Required) => Err(failure(
+            // an object leaves out a missing field with a factory, and a parameter cannot have one
+            (None, Presence::Required | Presence::DefaultFactory) => Err(failure(
                 ErrorKind::Missing,
                 location,
                 container.cloned().unwrap_or_default(),
@@ -195,19 +203,19 @@ fn object(
         .iter()
         .any(|field| field.is_required() && !members.contains_key(field.name()))
         .then(|| Value::Object(members.clone()));
-    collect_all(fields.iter().map(|field| {
+    collect_all(fields.iter().filter_map(|field| {
         let (name, member) = match members.remove_entry(field.name()) {
             Some((name, member)) => (name, Some(member)),
+            None if field.has_default_factory() => return None,
             None => (field.name().to_owned(), None),
         };
-        field
-            .validate_within(
-                member,
-                &location.key(&field.name),
-                original.as_ref(),
-                models,
-            )
-            .map(|validated| (name, validated))
+        let validated = field.validate_within(
+            member,
+            &location.key(&field.name),
+            original.as_ref(),
+            models,
+        );
+        Some(validated.map(|validated| (name, validated)))
     }))
     .map(|entries| Value::Object(entries.into_iter().collect::<Map<_, _>>()))
 }
@@ -414,6 +422,65 @@ mod tests {
                     json!("x")
                 ),
             ])
+        );
+    }
+
+    #[test]
+    fn leaves_out_a_missing_field_with_a_default_factory_and_validates_a_present_one() {
+        let item = Schema::object([
+            Field::new("name", Schema::string()),
+            Field::new("tags", Schema::array(Schema::string())).with_default_factory(),
+            Field::new("price", Schema::number()).with_default(1.5),
+        ]);
+
+        assert_eq!(
+            check(&item, json!({"name": "anvil"})).map(|value| value.to_string()),
+            Ok(r#"{"name":"anvil","price":1.5}"#.to_owned())
+        );
+        assert_eq!(
+            check(&item, json!({"price": 2, "tags": ["x"], "name": "anvil"}))
+                .map(|value| value.to_string()),
+            Ok(r#"{"name":"anvil","tags":["x"],"price":2.0}"#.to_owned())
+        );
+        assert_eq!(
+            check(&item, json!({"name": "anvil", "tags": null})),
+            failed(ErrorKind::ListType, json!(["body", "tags"]), json!(null))
+        );
+    }
+
+    #[test]
+    fn a_parameter_with_a_default_factory_is_missing_without_a_value() {
+        let field = Field::new("tag", Schema::string()).with_default_factory();
+
+        assert_eq!(
+            field.validate(None, &Location::root("query"), None),
+            failed(ErrorKind::Missing, json!(["query"]), json!(null))
+        );
+    }
+
+    #[test]
+    fn validates_a_response_at_its_own_location() {
+        let item = Schema::object([Field::new("id", Schema::integer())]);
+
+        let validated = item.validate_response(json!({"id": "5", "secret": "x"}));
+        let rejected = item.validate_response(json!({"id": "five"}));
+
+        assert_eq!(validated, Ok(json!({"id": 5})));
+        let rejected = rejected.err();
+        assert_eq!(
+            rejected.as_ref().map(ToString::to_string).as_deref(),
+            Some("1 validation error in the response")
+        );
+        assert_eq!(
+            rejected.as_ref().map(ResponseValidationError::errors),
+            Some(
+                &[json!({
+                    "type": "int_parsing",
+                    "loc": ["response", "id"],
+                    "msg": "Input should be a valid integer, unable to parse string as an integer",
+                    "input": "five"
+                })][..]
+            )
         );
     }
 

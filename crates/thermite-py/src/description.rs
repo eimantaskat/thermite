@@ -1,6 +1,10 @@
+use pyo3::IntoPyObjectExt;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::{PyBytes, PyList};
 use thermite_core as core;
+
+use crate::value::to_python;
 
 #[pyclass(frozen, from_py_object, module = "thermite._thermite")]
 #[derive(Debug, Clone)]
@@ -50,6 +54,29 @@ impl Schema {
     fn reference(name: &str) -> Self {
         Self(core::Schema::reference(name))
     }
+
+    // a handler's answer as JSON, validated and filtered, or the errors of one that does not match
+    fn validate_response<'py>(&self, py: Python<'py>, body: &[u8]) -> PyResult<Bound<'py, PyAny>> {
+        let validated = py.detach(|| {
+            let value: core::Value = serde_json::from_slice(body)?;
+            Ok::<_, serde_json::Error>(
+                self.0
+                    .validate_response(value)
+                    .map(|validated| validated.to_string()),
+            )
+        });
+        match validated.map_err(|error| PyValueError::new_err(error.to_string()))? {
+            Ok(validated) => PyBytes::new(py, validated.as_bytes()).into_bound_py_any(py),
+            Err(error) => {
+                let errors = error
+                    .errors()
+                    .iter()
+                    .map(|error| to_python(py, error))
+                    .collect::<PyResult<Vec<_>>>()?;
+                PyList::new(py, errors)?.into_bound_py_any(py)
+            }
+        }
+    }
 }
 
 #[pyclass(frozen, from_py_object, module = "thermite._thermite")]
@@ -66,6 +93,11 @@ impl Field {
     #[staticmethod]
     fn optional(name: &str, schema: Schema) -> Self {
         Self(core::Field::new(name, schema.0).optional())
+    }
+
+    #[staticmethod]
+    fn with_default_factory(name: &str, schema: Schema) -> Self {
+        Self(core::Field::new(name, schema.0).with_default_factory())
     }
 
     #[staticmethod]

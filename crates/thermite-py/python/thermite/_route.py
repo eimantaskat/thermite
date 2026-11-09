@@ -7,36 +7,52 @@ import logging
 from collections.abc import Callable, Coroutine
 from typing import Any, cast
 
+from thermite._errors import ResponseValidationError
 from thermite._schema import is_model
-from thermite._thermite import Respond
+from thermite._thermite import Respond, Schema
 
 _logger = logging.getLogger("thermite.error")
 
 
 class Route:
-    def __init__(self, handler: Callable[..., object], name: str) -> None:
+    def __init__(
+        self, handler: Callable[..., object], name: str, response: Schema | None
+    ) -> None:
         self._handler = handler
         self._name = name
+        self._response = response
 
     # also called from Rust, when a model rejects the body before the handler starts
     def fail(self, respond: Respond, error: BaseException) -> None:
         _logger.error("Exception in handler `%s`", self._name, exc_info=error)
         respond.fail(error)
 
+    # what the handler returned, validated and filtered by its return annotation
+    def answer(self, value: object) -> bytes:
+        body = _encode(value)
+        if self._response is None:
+            return body
+        validated = self._response.validate_response(body)
+        if isinstance(validated, list):
+            raise ResponseValidationError(validated)
+        return validated
+
 
 # called on a thread of the blocking pool, so the handler may block
 class SyncRoute(Route):
     def start(self, arguments: dict[str, object], respond: Respond) -> None:
         try:
-            respond.succeed(_encode(self._handler(**arguments)))
+            respond.succeed(self.answer(self._handler(**arguments)))
         except BaseException as error:
             self.fail(respond, error)
 
 
 # called on the event loop's thread
 class AsyncRoute(Route):
-    def __init__(self, handler: Callable[..., object], name: str) -> None:
-        super().__init__(handler, name)
+    def __init__(
+        self, handler: Callable[..., object], name: str, response: Schema | None
+    ) -> None:
+        super().__init__(handler, name, response)
         # the event loop only keeps a weak reference to a task
         self._running: set[asyncio.Task[object]] = set()
 
@@ -55,7 +71,7 @@ class AsyncRoute(Route):
     def _finish(self, respond: Respond, task: asyncio.Task[object]) -> None:
         self._running.discard(task)
         try:
-            respond.succeed(_encode(task.result()))
+            respond.succeed(self.answer(task.result()))
         except BaseException as error:
             self.fail(respond, error)
 

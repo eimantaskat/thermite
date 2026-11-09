@@ -159,3 +159,64 @@ def test_a_large_body_a_model_rejects_answers_500_for_a_def_handler(caplog):
     assert response.status_code == 500
     assert "Exception in handler `handler`" in caplog.text
     assert "rejected" in caplog.text
+
+
+def test_a_default_factory_runs_for_each_request_and_not_at_registration():
+    made = []
+
+    def stamp():
+        made.append(None)
+        return len(made)
+
+    @dataclass
+    class Order:
+        name: str
+        number: int = field(default_factory=stamp)
+
+    def handler(order: Order):
+        return order.number
+
+    client = client_for(handler)
+    registered = len(made)
+    first = client.post("/items", json={"name": "pen"}).json()
+    second = client.post("/items", json={"name": "ink"}).json()
+    sent = client.post("/items", json={"name": "nib", "number": "40"}).json()
+
+    assert registered == 0
+    assert [first, second, sent] == [1, 2, 40]
+
+
+def test_fields_after_a_missing_one_with_a_factory_arrive_by_name():
+    @dataclass
+    class Point:
+        x: int
+        labels: list[str] = field(default_factory=list)
+        y: int = 0
+        tags: list[str] = field(default_factory=lambda: ["new"])
+        z: int = 0
+
+    def handler(points: list[Point]):
+        return [
+            [point.x, point.labels, point.y, point.tags, point.z] for point in points
+        ]
+
+    response = client_for(handler).post(
+        "/items",
+        json=[{"x": 1, "y": 2}, {"z": 3, "labels": ["a"], "x": 4}, {"x": 5}],
+    )
+
+    assert response.json() == [
+        [1, [], 2, ["new"], 0],
+        [4, ["a"], 0, ["new"], 3],
+        [5, [], 0, ["new"], 0],
+    ]
+
+
+def test_a_field_with_a_factory_still_rejects_a_value_of_the_wrong_type():
+    def handler(point: Point):
+        return point.labels
+
+    response = client_for(handler).post("/items", json={"x": 1, "y": 2, "labels": None})
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "labels"]

@@ -60,7 +60,7 @@ def test_a_dataclass_gives_the_fields_of_its_model():
     assert model["required"] == ["name"]
     assert model["properties"]["name"]["type"] == "string"
     assert model["properties"]["price"]["default"] == 1.5
-    assert model["properties"]["tags"]["default"] == []
+    assert "default" not in model["properties"]["tags"]
     assert {"type": "null"} in model["properties"]["note"]["anyOf"]
 
 
