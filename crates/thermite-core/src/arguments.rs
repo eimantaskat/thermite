@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use serde_json::Value;
 
 use crate::description::ParameterLocation;
+use crate::upload::UploadedFiles;
 
 #[derive(Debug, Default)]
 pub struct Arguments {
@@ -11,6 +12,7 @@ pub struct Arguments {
     body: Option<Value>,
     // extractors get the arguments shared, so the one that owns the decoded body takes it out
     decoded_body: Mutex<Option<Box<dyn Any + Send>>>,
+    files: UploadedFiles,
 }
 
 impl Arguments {
@@ -23,7 +25,13 @@ impl Arguments {
             parameters,
             body,
             decoded_body: Mutex::new(decoded_body),
+            files: UploadedFiles::default(),
         }
+    }
+
+    pub(crate) fn with_files(mut self, files: UploadedFiles) -> Self {
+        self.files = files;
+        self
     }
 
     #[must_use]
@@ -49,6 +57,12 @@ impl Arguments {
     #[must_use]
     pub fn body(&self) -> Option<&Value> {
         self.body.as_ref()
+    }
+
+    // the files of a multipart form, which the markers in `body` stand for
+    #[must_use]
+    pub fn files(&self) -> &UploadedFiles {
+        &self.files
     }
 
     // what the route's body decoder made, given out once; the body is then not also validated into `body`

@@ -44,7 +44,7 @@ pub(crate) enum Body {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BodyEncoding {
     Json(Option<Decoder>),
-    // fields read like FastAPI's `Form`, from an `application/x-www-form-urlencoded` body
+    // fields read like FastAPI's `Form`, from an urlencoded or a multipart body
     Form,
 }
 
@@ -55,9 +55,16 @@ impl Default for BodyEncoding {
 }
 
 impl BodyEncoding {
-    pub(crate) fn media_type(&self) -> &'static str {
+    // FastAPI documents a form model holding files as urlencoded, which no client could send
+    pub(crate) fn media_type(&self, schema: &Schema) -> &'static str {
+        let has_files = || {
+            schema
+                .fields()
+                .is_some_and(|fields| fields.iter().any(|field| field.schema().takes_files()))
+        };
         match self {
             Self::Json(_) => "application/json",
+            Self::Form if has_files() => "multipart/form-data",
             Self::Form => "application/x-www-form-urlencoded",
         }
     }

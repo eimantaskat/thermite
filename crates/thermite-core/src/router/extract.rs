@@ -1,7 +1,10 @@
+mod form;
+
 use std::any::Any;
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use bytes::Bytes;
 use http::HeaderName;
 use http::header::{CONTENT_TYPE, COOKIE};
 use serde_json::error::Category;
@@ -12,41 +15,55 @@ use super::path::PathParameters;
 use crate::arguments::Arguments;
 use crate::description::{BodyEncoding, Parameter, ParameterLocation};
 use crate::handler::Request;
-use crate::parse::{decode_latin1, parse_cookies, parse_query};
-use crate::schema::{Field, Schema};
+use crate::parse::{MultipartError, decode_latin1, parse_cookies, parse_query};
+use crate::schema::Field;
+use crate::upload::{UploadedFile, UploadedFiles};
 use crate::validation::{ErrorKind, Location, ValidationError, collect_all};
+use form::form_input;
 
 // what the body gave, read on its own so that a large one can be read away from the other requests
 #[derive(Default)]
 pub(super) struct ReadBody {
     decoded: Option<Box<dyn Any + Send>>,
     validated: Option<Result<Value, Vec<ValidationError>>>,
+    files: Vec<UploadedFile>,
 }
 
 // what the request's content type says its body is
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Content {
     Json,
     Form,
+    Multipart { boundary: Option<String> },
     Other,
+}
+
+// a body that fails before its values can be validated
+#[derive(Debug)]
+pub(super) enum BodyRejection {
+    Invalid(Vec<ValidationError>),
+    // answered with 400, as Starlette does
+    Malformed(MultipartError),
 }
 
 pub(super) fn read_body(
     inputs: &Inputs,
-    body: &[u8],
-    content: Content,
-) -> Result<ReadBody, Vec<ValidationError>> {
+    body: &Bytes,
+    content: &Content,
+) -> Result<ReadBody, BodyRejection> {
     let Some(schema) = &inputs.body else {
         return Ok(ReadBody::default());
     };
     let location = Location::root("body");
-    let is_json = content == Content::Json;
+    let is_json = *content == Content::Json;
     let decoded = match &inputs.encoding {
         BodyEncoding::Form => {
-            let validated = schema.validate(form_input(schema, body, content), &location);
+            let (input, files) =
+                form_input(schema, body, content).map_err(BodyRejection::Malformed)?;
             return Ok(ReadBody {
                 decoded: None,
-                validated: Some(validated),
+                validated: Some(schema.validate(input, &location)),
+                files,
             });
         }
         BodyEncoding::Json(Some(decoder)) if !body.is_empty() && is_json => decoder.decode(body),
@@ -57,10 +74,11 @@ pub(super) fn read_body(
         return Ok(ReadBody {
             decoded,
             validated: None,
+            files: Vec::new(),
         });
     }
     // like FastAPI, a body that is not JSON fails on its own, before any parameter is checked
-    let validated = match parse_body(body, is_json)? {
+    let validated = match parse_body(body, is_json).map_err(BodyRejection::Invalid)? {
         Some(input) => schema.validate(input, &location),
         None => Err(vec![ValidationError::new(
             ErrorKind::Missing,
@@ -71,6 +89,7 @@ pub(super) fn read_body(
     Ok(ReadBody {
         decoded: None,
         validated: Some(validated),
+        files: Vec::new(),
     })
 }
 
@@ -124,7 +143,8 @@ pub(super) fn extract_arguments(
     match (before_body, validated, after_body) {
         (Ok(mut parameters), Ok(validated), Ok(after_body)) => {
             parameters.extend(after_body);
-            Ok(Arguments::new(parameters, validated, body.decoded))
+            Ok(Arguments::new(parameters, validated, body.decoded)
+                .with_files(UploadedFiles::new(body.files)))
         }
         (before_body, body, after_body) => Err(before_body
             .err()
@@ -148,26 +168,34 @@ fn validate_parameter(
 }
 
 fn query_input(parameter: &Parameter, query: &[(Cow<'_, str>, Cow<'_, str>)]) -> Option<Value> {
-    named_values(query, parameter.field(), |_| true)
+    named_values(
+        query,
+        parameter.field(),
+        |value| Value::from(value.as_ref()),
+        |_| true,
+        |_| true,
+    )
 }
 
-// a list collects every value of a repeated name, a single value takes the last one like Starlette, if `keep` keeps it
-fn named_values(
-    pairs: &[(Cow<'_, str>, Cow<'_, str>)],
+// a list collects every value of a repeated name that `keep_item` keeps, a single value the last one like Starlette, if `keep_single` keeps it
+fn named_values<V>(
+    pairs: &[(Cow<'_, str>, V)],
     field: &Field,
-    keep: impl Fn(&str) -> bool,
+    to_value: impl Fn(&V) -> Value,
+    keep_single: impl Fn(&V) -> bool,
+    keep_item: impl Fn(&V) -> bool,
 ) -> Option<Value> {
     let mut values = pairs
         .iter()
         .filter(|(found, _)| found == field.name())
-        .map(|(_, value)| value.as_ref());
+        .map(|(_, value)| value);
     if field.schema().is_array() {
-        list(values.map(Value::from))
+        list(values.filter(|value| keep_item(value)).map(to_value))
     } else {
         values
             .next_back()
-            .filter(|value| keep(value))
-            .map(Value::from)
+            .filter(|value| keep_single(value))
+            .map(to_value)
     }
 }
 
@@ -192,22 +220,6 @@ fn header_input(
 fn list(values: impl Iterator<Item = Value>) -> Option<Value> {
     let values: Vec<Value> = values.collect();
     (!values.is_empty()).then_some(Value::Array(values))
-}
-
-// the declared fields as an object of strings; like Starlette, a body of another content type is an empty form
-fn form_input(schema: &Schema, body: &[u8], content: Content) -> Value {
-    let text = match content {
-        Content::Form => decode_latin1(body),
-        Content::Json | Content::Other => Cow::Borrowed(""),
-    };
-    let pairs = parse_query(&text);
-    let fields = schema.fields().unwrap_or_default();
-    // like FastAPI, an empty value is missing, though a list keeps its empty items
-    let members = fields.iter().filter_map(|field| {
-        named_values(&pairs, field, |value| !value.is_empty())
-            .map(|value| (field.name().to_owned(), value))
-    });
-    Value::Object(members.collect())
 }
 
 // FastAPI parses the body as JSON when the content type says JSON or is missing, and passes it on as text otherwise
@@ -242,6 +254,13 @@ pub(super) fn content(request: &Request) -> Content {
         .unwrap_or_default()
         .trim()
         .to_ascii_lowercase();
+    if media_type == "multipart/form-data" {
+        let boundary = content_type
+            .to_str()
+            .ok()
+            .and_then(|content_type| multer::parse_boundary(content_type).ok());
+        return Content::Multipart { boundary };
+    }
     match media_type.strip_prefix("application/") {
         Some("x-www-form-urlencoded") => Content::Form,
         Some(subtype) if subtype == "json" || subtype.ends_with("+json") => Content::Json,
@@ -337,8 +356,17 @@ mod tests {
         request: &Request,
     ) -> Result<Arguments, Vec<ValidationError>> {
         let inputs = inputs(description);
-        let body = read_body(&inputs, request.body(), content(request))?;
+        // a test that expects a malformed body reads it with `read_body` itself
+        let body = read_body(&inputs, request.body(), &content(request))
+            .map_err(|rejection| invalid(rejection).unwrap())?;
         extract_arguments(&inputs, path_parameters, request, body)
+    }
+
+    fn invalid(rejection: BodyRejection) -> Result<Vec<ValidationError>, MultipartError> {
+        match rejection {
+            BodyRejection::Invalid(errors) => Ok(errors),
+            BodyRejection::Malformed(error) => Err(error),
+        }
     }
 
     // takes a JSON integer as it is, and gives up on anything validation would coerce or reject
@@ -555,6 +583,191 @@ mod tests {
         .unwrap();
 
         assert_eq!(text.body(), Some(&json!("name=a")));
+    }
+
+    // each part is its Content-Disposition parameters and its content
+    fn multipart(parts: &[(&str, &[u8])]) -> Request {
+        multipart_with("multipart/form-data; boundary=XyZ", parts)
+    }
+
+    fn multipart_with(content_type: &'static str, parts: &[(&str, &[u8])]) -> Request {
+        let mut body = Vec::new();
+        for (disposition, content) in parts {
+            body.extend_from_slice(b"--XyZ\r\nContent-Disposition: form-data; ");
+            body.extend_from_slice(disposition.as_bytes());
+            body.extend_from_slice(b"\r\n\r\n");
+            body.extend_from_slice(content);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(b"--XyZ--\r\n");
+        let mut request = Request::new(Bytes::from(body));
+        *request.uri_mut() = "/upload".parse().unwrap();
+        request
+            .headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_static(content_type));
+        request
+    }
+
+    fn with_upload() -> RouteDescription {
+        with_form([
+            Field::new("title", Schema::string()),
+            Field::new("file", Schema::file()),
+            Field::new("extra", Schema::array(Schema::file())).with_default(json!([])),
+        ])
+    }
+
+    fn marker(filename: &str, index: usize) -> Value {
+        json!({"filename": filename, "content_type": null, "size": 1, "index": index})
+    }
+
+    #[test]
+    fn reads_multipart_text_fields_as_it_reads_urlencoded_ones() {
+        let description = with_form([
+            Field::new("name", Schema::string()),
+            Field::new("count", Schema::integer()).optional(),
+            Field::new("tags", Schema::array(Schema::string())),
+        ]);
+        let request = multipart_with(
+            "Multipart/Form-Data; boundary=\"XyZ\"",
+            &[
+                (r#"name="name""#, b"a"),
+                (r#"name="name""#, b"b"),
+                (r#"name="tags""#, b"x"),
+                (r#"name="tags""#, b""),
+                (r#"name="count""#, b""),
+                (r#"name="other""#, b"1"),
+            ],
+        );
+
+        let arguments = extract(&description, &request).unwrap();
+
+        assert_eq!(
+            arguments.body(),
+            Some(&json!({"name": "b", "count": null, "tags": ["x", ""]}))
+        );
+        assert!(arguments.files().is_empty());
+    }
+
+    #[test]
+    fn a_file_stands_in_the_form_as_a_marker_of_it() {
+        let request = multipart(&[
+            (r#"name="title""#, b"t"),
+            (r#"name="file"; filename="a.txt""#, b"hello"),
+            (r#"name="extra"; filename="b.txt""#, b"b"),
+            (r#"name="extra"; filename="c.txt""#, b"c"),
+        ]);
+
+        let arguments = extract(&with_upload(), &request).unwrap();
+
+        let body = arguments.body().unwrap();
+        assert_eq!(body["title"], json!("t"));
+        let file = |marker: &Value| arguments.files().find(marker).unwrap().clone();
+        assert_eq!(file(&body["file"]).content().as_ref(), b"hello");
+        let extra: Vec<String> = body["extra"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|marker| file(marker).filename().to_owned())
+            .collect();
+        assert_eq!(extra, ["b.txt", "c.txt"]);
+    }
+
+    #[test]
+    fn a_file_without_a_filename_is_missing_to_a_field_of_files_like_fastapi() {
+        let request = multipart(&[
+            (r#"name="title""#, b"t"),
+            (r#"name="file"; filename="""#, b""),
+            (r#"name="extra"; filename="""#, b""),
+            (r#"name="extra"; filename="b.txt""#, b"b"),
+        ]);
+
+        let errors = extract(&with_upload(), &request).err().unwrap();
+
+        assert_eq!(
+            errors,
+            vec![ValidationError::at(
+                ErrorKind::Missing,
+                json!(["body", "file"]),
+                json!({"title": "t", "extra": [marker("b.txt", 2)]})
+            )]
+        );
+    }
+
+    #[test]
+    fn a_file_is_no_text_and_text_is_no_file() {
+        let request = multipart(&[
+            (r#"name="title"; filename="t.txt""#, b"t"),
+            (r#"name="file""#, b"not a file"),
+        ]);
+
+        let errors = extract(&with_upload(), &request).err().unwrap();
+
+        assert_eq!(
+            errors,
+            vec![
+                ValidationError::at(
+                    ErrorKind::StringType,
+                    json!(["body", "title"]),
+                    marker("t.txt", 0)
+                ),
+                ValidationError::at(
+                    ErrorKind::UploadFileType,
+                    json!(["body", "file"]),
+                    json!("not a file")
+                )
+                .with_context(json!({"error": {}})),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_urlencoded_form_holds_no_files() {
+        let request = request("/upload", FORM, "title=t&file=x");
+
+        let errors = extract(&with_upload(), &request).err().unwrap();
+
+        assert_eq!(
+            errors,
+            vec![
+                ValidationError::at(
+                    ErrorKind::UploadFileType,
+                    json!(["body", "file"]),
+                    json!("x")
+                )
+                .with_context(json!({"error": {}}))
+            ]
+        );
+    }
+
+    #[test]
+    fn a_malformed_multipart_body_fails_before_validation() {
+        let inputs = inputs(&with_upload());
+        let read = |request: &Request| {
+            invalid(
+                read_body(&inputs, request.body(), &content(request))
+                    .err()
+                    .unwrap(),
+            )
+        };
+        let no_boundary = multipart_with("multipart/form-data", &[(r#"name="title""#, b"t")]);
+        let no_name = multipart(&[("x=1", b"t")]);
+        let mut garbage = multipart(&[]);
+        *garbage.body_mut() = Bytes::from_static(b"garbage");
+
+        assert_eq!(read(&no_boundary), Err(MultipartError::MissingBoundary));
+        assert_eq!(read(&no_name), Err(MultipartError::MissingName));
+        assert_eq!(read(&garbage), Err(MultipartError::Invalid));
+    }
+
+    #[test]
+    fn a_multipart_body_sent_to_a_json_body_is_text() {
+        let text = extract(
+            &with_body(Schema::string()),
+            &multipart(&[(r#"name="a""#, b"1")]),
+        )
+        .unwrap();
+
+        assert!(text.body().unwrap().as_str().unwrap().starts_with("--XyZ"));
     }
 
     #[test]

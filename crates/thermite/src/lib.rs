@@ -22,6 +22,7 @@ mod router;
 mod security;
 mod state;
 mod test_client;
+mod upload;
 mod websocket;
 
 pub use app::App;
@@ -44,8 +45,8 @@ pub use router::Router;
 pub use security::{NotAuthenticated, SecurityScheme};
 pub use state::State;
 pub use test_client::{
-    TestClient, TestRequest, TestRequestError, TestResponse, TestWebSocket, TestWebSocketError,
-    TestWebSocketRequest,
+    TestClient, TestMultipart, TestRequest, TestRequestError, TestResponse, TestWebSocket,
+    TestWebSocketError, TestWebSocketRequest,
 };
 pub use thermite_core::{
     ApiKeyLocation, Arguments, BackgroundTasks, CloseCode, Field, HttpAuthorizationCredentials,
@@ -58,4 +59,5 @@ pub use thermite_core::{
 pub use thermite_macros::{
     Model, SecurityScheme, delete, get, head, options, patch, post, put, trace, websocket,
 };
+pub use upload::UploadFile;
 pub use websocket::{WebSocket, WebSocketConnection, WebSocketHandler, WebSocketOutput};

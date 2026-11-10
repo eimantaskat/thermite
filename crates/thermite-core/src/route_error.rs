@@ -41,8 +41,10 @@ pub enum RouteError {
     DuplicateBody { path: String },
     #[error("the form body of `{path}` must be an object, whose fields are the form's")]
     FormBodyNotObject { path: String },
-    #[error("form field `{name}` of `{path}` must be a scalar or a list of scalars")]
+    #[error("form field `{name}` of `{path}` must be a scalar or a file, or a list of them")]
     UnsupportedFormFieldType { path: String, name: String },
+    #[error("the JSON body of `{path}` holds a file, which only a form body can")]
+    FileInJsonBody { path: String },
     #[error("{location} of `{path}` has the field `{name}` more than once in one object")]
     DuplicateField {
         path: String,

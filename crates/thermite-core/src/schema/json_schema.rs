@@ -70,6 +70,10 @@ impl Schema {
             // the model it repeats encloses it, so the components describe that model
             Kind::Reference(name) => reference(name),
             Kind::Any => JsonSchema::new(),
+            Kind::File => entries([
+                ("type", "string".into()),
+                ("contentMediaType", "application/octet-stream".into()),
+            ]),
         })
     }
 }

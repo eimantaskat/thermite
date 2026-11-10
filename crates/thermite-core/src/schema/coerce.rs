@@ -1,8 +1,9 @@
 use std::mem;
 
-use serde_json::{Map, Number, Value};
+use serde_json::{Map, Number, Value, json};
 
 use super::{Field, Kind, Models, Presence, Schema};
+use crate::upload::is_marker;
 use crate::validation::{ErrorKind, Location, ValidationError, collect_all};
 
 pub(crate) type Validated = Result<Value, Vec<ValidationError>>;
@@ -40,6 +41,7 @@ impl Schema {
                 None => Ok(Coerced::Unchanged),
             },
             Kind::Any => Ok(Coerced::Unchanged),
+            Kind::File => return file(value, location),
         };
         match coerced {
             Ok(Coerced::Unchanged) => Ok(value),
@@ -82,6 +84,17 @@ impl Field {
 
 fn failure(kind: ErrorKind, location: &Location<'_>, input: Value) -> Vec<ValidationError> {
     vec![ValidationError::new(kind, location, input)]
+}
+
+// FastAPI's UploadFile refuses anything but a file, with a message of its own
+fn file(value: Value, location: &Location<'_>) -> Validated {
+    if is_marker(&value) {
+        return Ok(value);
+    }
+    Err(vec![
+        ValidationError::new(ErrorKind::UploadFileType, location, value)
+            .with_context(json!({ "error": {} })),
+    ])
 }
 
 fn string(value: &Value) -> Result<Coerced, ErrorKind> {

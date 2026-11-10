@@ -7,6 +7,7 @@ use http::{HeaderName, HeaderValue, Method};
 use serde::Serialize;
 use thermite_core::{InProcessServer, Request};
 
+use super::test_multipart::TestMultipart;
 use super::test_response::TestResponse;
 use crate::app::App;
 
@@ -88,6 +89,14 @@ impl<'client> TestRequest<'client> {
         self.body_type = Some(HeaderValue::from_static(
             "application/x-www-form-urlencoded",
         ));
+        self
+    }
+
+    #[must_use]
+    pub fn multipart(mut self, form: &TestMultipart) -> Self {
+        let (content_type, body) = form.encode();
+        self.body = Ok(body);
+        self.body_type = Some(content_type);
         self
     }
 

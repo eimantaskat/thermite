@@ -1,3 +1,4 @@
+mod test_multipart;
 mod test_request;
 mod test_response;
 mod test_websocket;
@@ -7,6 +8,7 @@ use thermite_core::{InProcessServer, ServerError};
 
 use crate::app::App;
 
+pub use test_multipart::TestMultipart;
 pub use test_request::{TestRequest, TestRequestError};
 pub use test_response::TestResponse;
 pub use test_websocket::{TestWebSocket, TestWebSocketError, TestWebSocketRequest};

@@ -30,6 +30,8 @@ enum Kind {
     Reference(String),
     // any JSON value, like pydantic's Any
     Any,
+    // an uploaded file, which only a form can hold
+    File,
 }
 
 impl Schema {
@@ -84,11 +86,42 @@ impl Schema {
         Self(Kind::Any)
     }
 
+    #[must_use]
+    pub fn file() -> Self {
+        Self(Kind::File)
+    }
+
     pub(crate) fn is_scalar(&self) -> bool {
         !matches!(
             self.0,
-            Kind::Array(_) | Kind::Object { .. } | Kind::Reference(_)
+            Kind::Array(_) | Kind::Object { .. } | Kind::Reference(_) | Kind::File
         )
+    }
+
+    // a form field holds text or files, one or a list of them
+    pub(crate) fn is_form_field(&self) -> bool {
+        let one = |schema: &Schema| schema.is_scalar() || schema.0 == Kind::File;
+        match &self.0 {
+            Kind::Array(items) => one(items),
+            _ => one(self),
+        }
+    }
+
+    // a field read as files, where a part sent without a filename stands for none
+    pub(crate) fn takes_files(&self) -> bool {
+        match &self.0 {
+            Kind::Array(items) => items.0 == Kind::File,
+            kind => *kind == Kind::File,
+        }
+    }
+
+    pub(crate) fn contains_file(&self) -> bool {
+        match &self.0 {
+            Kind::File => true,
+            Kind::Array(items) => items.contains_file(),
+            Kind::Object { fields, .. } => fields.iter().any(|field| field.schema.contains_file()),
+            _ => false,
+        }
     }
 
     pub(crate) fn is_scalar_or_list_of_scalars(&self) -> bool {

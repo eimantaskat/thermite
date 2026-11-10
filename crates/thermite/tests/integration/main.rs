@@ -15,4 +15,5 @@ mod security;
 mod state;
 mod support;
 mod test_client;
+mod uploads;
 mod websockets;

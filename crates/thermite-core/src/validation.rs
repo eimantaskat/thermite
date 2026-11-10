@@ -23,6 +23,7 @@ pub(crate) enum ErrorKind {
     ListType,
     ModelAttributesType,
     JsonInvalid,
+    UploadFileType,
 }
 
 impl ErrorKind {
@@ -61,6 +62,10 @@ impl ErrorKind {
                 "Input should be a valid dictionary or object to extract fields from",
             ),
             Self::JsonInvalid => ("json_invalid", "JSON decode error"),
+            Self::UploadFileType => (
+                "value_error",
+                "Value error, Expected UploadFile, received: <class 'str'>",
+            ),
         }
     }
 }

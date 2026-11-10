@@ -51,6 +51,8 @@ pub(super) fn check_description(
         check_schema(body, SchemaLocation::Body, &path)?;
         if inputs.encoding == BodyEncoding::Form {
             check_form_fields(body, &path)?;
+        } else if body.contains_file() {
+            return Err(RouteError::FileInJsonBody { path });
         }
     }
     for response in &responses {
@@ -141,17 +143,14 @@ fn flatten(declarations: Declarations, path: &str, inputs: &mut Inputs) -> Resul
     }
 }
 
-// a form value is text, so a field can only be a scalar or a list of them, as in the query
+// a form value is text or a file, so a field can only be one of those or a list of them
 fn check_form_fields(body: &Schema, path: &str) -> Result<(), RouteError> {
     let Some(fields) = body.fields() else {
         return Err(RouteError::FormBodyNotObject {
             path: path.to_owned(),
         });
     };
-    match fields
-        .iter()
-        .find(|field| !field.schema().is_scalar_or_list_of_scalars())
-    {
+    match fields.iter().find(|field| !field.schema().is_form_field()) {
         Some(field) => Err(RouteError::UnsupportedFormFieldType {
             path: path.to_owned(),
             name: field.name().to_owned(),
@@ -526,6 +525,37 @@ mod tests {
                 })
             );
         }
+    }
+
+    #[test]
+    fn a_form_field_may_be_a_file_or_a_list_of_files() {
+        let upload = Schema::object([
+            Field::new("file", Schema::file()),
+            Field::new("extra", Schema::array(Schema::file())),
+        ]);
+
+        assert!(check(&items("/upload").form_body(upload)).is_ok());
+    }
+
+    #[test]
+    fn only_a_form_body_holds_files() {
+        let nested = Schema::object([Field::new(
+            "files",
+            Schema::array(Schema::object([Field::new("file", Schema::file())])),
+        )]);
+        for schema in [Schema::file(), nested] {
+            assert_eq!(
+                check(&items("/upload").body(schema)),
+                Err(RouteError::FileInJsonBody {
+                    path: "/upload".to_owned()
+                })
+            );
+        }
+        let query = Parameter::query("file", Schema::file());
+        assert!(matches!(
+            check(&items("/upload").parameter(query)),
+            Err(RouteError::UnsupportedParameterType { .. })
+        ));
     }
 
     #[test]

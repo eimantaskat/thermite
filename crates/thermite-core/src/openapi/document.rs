@@ -149,7 +149,7 @@ fn describe<'router>(
         described.insert(
             "requestBody".to_owned(),
             json!({
-                "content": { encoding.media_type(): { "schema": body.json_schema(components)? } },
+                "content": { encoding.media_type(body): { "schema": body.json_schema(components)? } },
                 "required": true
             }),
         );
@@ -516,6 +516,33 @@ mod tests {
                 },
                 "required": true
             })
+        );
+    }
+
+    #[test]
+    fn documents_a_form_holding_files_as_multipart() {
+        let upload = Schema::model(
+            "Upload",
+            [
+                Field::new("file", Schema::file()),
+                Field::new("extra", Schema::array(Schema::file())),
+            ],
+        );
+
+        let document = document(items().form_body(upload)).unwrap();
+
+        assert_eq!(
+            document["paths"]["/items"]["post"]["requestBody"]["content"],
+            json!({ "multipart/form-data": { "schema": reference("Upload") } })
+        );
+        let properties = &document["components"]["schemas"]["Upload"]["properties"];
+        assert_eq!(
+            properties["file"],
+            json!({"type": "string", "contentMediaType": "application/octet-stream", "title": "File"})
+        );
+        assert_eq!(
+            properties["extra"]["items"],
+            json!({"type": "string", "contentMediaType": "application/octet-stream"})
         );
     }
 

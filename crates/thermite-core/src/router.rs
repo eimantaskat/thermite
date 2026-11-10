@@ -18,13 +18,13 @@ use crate::response::internal_server_error;
 use crate::route_error::RouteError;
 use crate::schema::Schema;
 use crate::security::SecuritySchemeDescription;
-use crate::validation::{ValidationError, validation_failed};
+use crate::validation::validation_failed;
 use crate::websocket::{
     AcceptKey, BoxedWebSocketHandler, WebSocketHandler, check_handshake, is_handshake, open,
     refusal,
 };
 use check::{Checked, Inputs, check_description};
-use extract::{ReadBody, content, extract_arguments, read_body};
+use extract::{BodyRejection, ReadBody, content, extract_arguments, read_body};
 use path::PathPattern;
 use table::{Lookup, RouteTable};
 
@@ -178,12 +178,20 @@ impl Router {
                 value: route,
                 parameters,
             } => {
-                let Some(body) = read_request_body(&route.inputs, request).await else {
-                    return Dispatch::Respond(internal_server_error());
+                let body = match read_request_body(&route.inputs, request).await {
+                    Some(Ok(body)) => body,
+                    Some(Err(BodyRejection::Invalid(errors))) => {
+                        return Dispatch::Respond(validation_failed(errors));
+                    }
+                    Some(Err(BodyRejection::Malformed(error))) => {
+                        return Dispatch::Respond(
+                            HttpError::new(StatusCode::BAD_REQUEST, error.to_string())
+                                .into_response(),
+                        );
+                    }
+                    None => return Dispatch::Respond(internal_server_error()),
                 };
-                match body
-                    .and_then(|body| extract_arguments(&route.inputs, &parameters, request, body))
-                {
+                match extract_arguments(&route.inputs, &parameters, request, body) {
                     Ok(arguments) => Dispatch::Endpoint(route.endpoint.as_ref(), arguments),
                     Err(errors) => Dispatch::Respond(validation_failed(errors)),
                 }
@@ -250,14 +258,14 @@ impl RequestHandler for Router {
 async fn read_request_body(
     inputs: &Arc<Inputs>,
     request: &Request,
-) -> Option<Result<ReadBody, Vec<ValidationError>>> {
+) -> Option<Result<ReadBody, BodyRejection>> {
     let content = content(request);
     if inputs.body.is_none() || request.body().len() < LARGE_BODY {
-        return Some(read_body(inputs, request.body(), content));
+        return Some(read_body(inputs, request.body(), &content));
     }
     let inputs = Arc::clone(inputs);
     let body = request.body().clone();
-    match tokio::task::spawn_blocking(move || read_body(&inputs, &body, content)).await {
+    match tokio::task::spawn_blocking(move || read_body(&inputs, &body, &content)).await {
         Ok(read) => Some(read),
         // a decoder that panicked fails the request as it would have on the worker
         Err(error) => match error.try_into_panic() {
