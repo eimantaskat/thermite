@@ -11,7 +11,7 @@ use http::header::ALLOW;
 use http::{HeaderValue, Method, StatusCode};
 
 use crate::arguments::Arguments;
-use crate::description::{Parameter, ResponseDescription, RouteDescription};
+use crate::description::{BodyEncoding, Parameter, ResponseDescription, RouteDescription};
 use crate::handler::{Endpoint, Request, RequestHandler, Response, RouteHandler};
 use crate::http_error::HttpError;
 use crate::response::internal_server_error;
@@ -24,7 +24,7 @@ use crate::websocket::{
     refusal,
 };
 use check::{Checked, Inputs, check_description};
-use extract::{ReadBody, declares_json, extract_arguments, read_body};
+use extract::{ReadBody, content, extract_arguments, read_body};
 use path::PathPattern;
 use table::{Lookup, RouteTable};
 
@@ -61,7 +61,7 @@ pub(crate) struct Operation<'router> {
     pub(crate) name: Option<&'router str>,
     pub(crate) tags: &'router [String],
     pub(crate) parameters: &'router [Parameter],
-    pub(crate) body: Option<&'router Schema>,
+    pub(crate) body: Option<(&'router Schema, &'router BodyEncoding)>,
     pub(crate) responses: &'router [ResponseDescription],
     pub(crate) security: &'router [SecuritySchemeDescription],
 }
@@ -158,7 +158,11 @@ impl Router {
                 name: route.name.as_deref(),
                 tags: &route.tags,
                 parameters: &route.inputs.parameters,
-                body: route.inputs.body.as_ref(),
+                body: route
+                    .inputs
+                    .body
+                    .as_ref()
+                    .map(|schema| (schema, &route.inputs.encoding)),
                 responses: &route.responses,
                 security: &route.security,
             })
@@ -247,13 +251,13 @@ async fn read_request_body(
     inputs: &Arc<Inputs>,
     request: &Request,
 ) -> Option<Result<ReadBody, Vec<ValidationError>>> {
-    let is_json = declares_json(request);
+    let content = content(request);
     if inputs.body.is_none() || request.body().len() < LARGE_BODY {
-        return Some(read_body(inputs, request.body(), is_json));
+        return Some(read_body(inputs, request.body(), content));
     }
     let inputs = Arc::clone(inputs);
     let body = request.body().clone();
-    match tokio::task::spawn_blocking(move || read_body(&inputs, &body, is_json)).await {
+    match tokio::task::spawn_blocking(move || read_body(&inputs, &body, content)).await {
         Ok(read) => Some(read),
         // a decoder that panicked fails the request as it would have on the worker
         Err(error) => match error.try_into_panic() {

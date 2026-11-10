@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use bytes::Bytes;
 use http::header::{CONTENT_LENGTH, CONTENT_TYPE, HOST};
 use http::request::Builder;
@@ -67,6 +69,28 @@ impl<'client> TestRequest<'client> {
         self
     }
 
+    // encoded like a browser's form, every byte but letters, digits and `*-._` escaped and spaces as `+`
+    #[must_use]
+    pub fn form<Name: AsRef<str>, Value: AsRef<str>>(
+        mut self,
+        pairs: impl IntoIterator<Item = (Name, Value)>,
+    ) -> Self {
+        let mut encoded = String::new();
+        for (name, value) in pairs {
+            if !encoded.is_empty() {
+                encoded.push('&');
+            }
+            form_encode(&mut encoded, name.as_ref());
+            encoded.push('=');
+            form_encode(&mut encoded, value.as_ref());
+        }
+        self.body = Ok(Bytes::from(encoded));
+        self.body_type = Some(HeaderValue::from_static(
+            "application/x-www-form-urlencoded",
+        ));
+        self
+    }
+
     pub async fn send(self) -> Result<TestResponse, TestRequestError> {
         let server = self.server;
         let request = self.build()?;
@@ -101,5 +125,20 @@ impl<'client> TestRequest<'client> {
             headers.entry(CONTENT_TYPE).or_insert(body_type);
         }
         Ok(request)
+    }
+}
+
+fn form_encode(encoded: &mut String, text: &str) {
+    for byte in text.bytes() {
+        match byte {
+            b' ' => encoded.push('+'),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'*' | b'-' | b'.' | b'_' => {
+                encoded.push(char::from(byte));
+            }
+            // writing to a String cannot fail
+            _ => {
+                let _ = write!(encoded, "%{byte:02X}");
+            }
+        }
     }
 }

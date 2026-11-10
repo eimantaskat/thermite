@@ -36,8 +36,31 @@ pub(crate) struct Declarations {
 pub(crate) enum Body {
     #[default]
     NotDeclared,
-    Declared(Schema, Option<Decoder>),
+    Declared(Schema, BodyEncoding),
     DeclaredTwice,
+}
+
+// how the body is read; a decoder only ever reads JSON
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BodyEncoding {
+    Json(Option<Decoder>),
+    // fields read like FastAPI's `Form`, from an `application/x-www-form-urlencoded` body
+    Form,
+}
+
+impl Default for BodyEncoding {
+    fn default() -> Self {
+        Self::Json(None)
+    }
+}
+
+impl BodyEncoding {
+    pub(crate) fn media_type(&self) -> &'static str {
+        match self {
+            Self::Json(_) => "application/json",
+            Self::Form => "application/x-www-form-urlencoded",
+        }
+    }
 }
 
 impl RouteDescription {
@@ -88,18 +111,24 @@ impl RouteDescription {
 
     #[must_use]
     pub fn body(self, schema: Schema) -> Self {
-        self.declare_body(schema, None)
+        self.declare_body(schema, BodyEncoding::Json(None))
     }
 
     // the decoder is tried first on a JSON body, and validation runs only when it gives up
     #[must_use]
     pub fn body_with_decoder(self, schema: Schema, decoder: impl BodyDecoder) -> Self {
-        self.declare_body(schema, Some(Decoder::new(decoder)))
+        self.declare_body(schema, BodyEncoding::Json(Some(Decoder::new(decoder))))
     }
 
-    fn declare_body(mut self, schema: Schema, decoder: Option<Decoder>) -> Self {
+    // each field of the object schema is read from the form, so the schema must be an object
+    #[must_use]
+    pub fn form_body(self, schema: Schema) -> Self {
+        self.declare_body(schema, BodyEncoding::Form)
+    }
+
+    fn declare_body(mut self, schema: Schema, encoding: BodyEncoding) -> Self {
         self.declarations.body = match self.declarations.body {
-            Body::NotDeclared => Body::Declared(schema, decoder),
+            Body::NotDeclared => Body::Declared(schema, encoding),
             Body::Declared(..) | Body::DeclaredTwice => Body::DeclaredTwice,
         };
         self

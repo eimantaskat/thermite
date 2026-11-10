@@ -205,6 +205,13 @@ impl Schema {
     pub(crate) fn is_array(&self) -> bool {
         matches!(self.0, Kind::Array(_))
     }
+
+    pub(crate) fn fields(&self) -> Option<&[Field]> {
+        match &self.0 {
+            Kind::Object { fields, .. } => Some(fields),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -10,9 +10,10 @@ use serde_json::{Value, json};
 use super::check::Inputs;
 use super::path::PathParameters;
 use crate::arguments::Arguments;
-use crate::description::{Parameter, ParameterLocation};
+use crate::description::{BodyEncoding, Parameter, ParameterLocation};
 use crate::handler::Request;
 use crate::parse::{decode_latin1, parse_cookies, parse_query};
+use crate::schema::{Field, Schema};
 use crate::validation::{ErrorKind, Location, ValidationError, collect_all};
 
 // what the body gave, read on its own so that a large one can be read away from the other requests
@@ -22,20 +23,36 @@ pub(super) struct ReadBody {
     validated: Option<Result<Value, Vec<ValidationError>>>,
 }
 
+// what the request's content type says its body is
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Content {
+    Json,
+    Form,
+    Other,
+}
+
 pub(super) fn read_body(
     inputs: &Inputs,
     body: &[u8],
-    is_json: bool,
+    content: Content,
 ) -> Result<ReadBody, Vec<ValidationError>> {
     let Some(schema) = &inputs.body else {
         return Ok(ReadBody::default());
     };
+    let location = Location::root("body");
+    let is_json = content == Content::Json;
+    let decoded = match &inputs.encoding {
+        BodyEncoding::Form => {
+            let validated = schema.validate(form_input(schema, body, content), &location);
+            return Ok(ReadBody {
+                decoded: None,
+                validated: Some(validated),
+            });
+        }
+        BodyEncoding::Json(Some(decoder)) if !body.is_empty() && is_json => decoder.decode(body),
+        BodyEncoding::Json(_) => None,
+    };
     // a decoded body is valid, so only the parameters are left to report
-    let decoded = inputs
-        .decoder
-        .as_ref()
-        .filter(|_| !body.is_empty() && is_json)
-        .and_then(|decoder| decoder.decode(body));
     if decoded.is_some() {
         return Ok(ReadBody {
             decoded,
@@ -43,7 +60,6 @@ pub(super) fn read_body(
         });
     }
     // like FastAPI, a body that is not JSON fails on its own, before any parameter is checked
-    let location = Location::root("body");
     let validated = match parse_body(body, is_json)? {
         Some(input) => schema.validate(input, &location),
         None => Err(vec![ValidationError::new(
@@ -131,17 +147,27 @@ fn validate_parameter(
         .map(|value| (parameter.location(), Arc::clone(field.shared_name()), value))
 }
 
-// a list collects every value of a repeated name, a single value takes the last one like Starlette
 fn query_input(parameter: &Parameter, query: &[(Cow<'_, str>, Cow<'_, str>)]) -> Option<Value> {
-    let name = parameter.field().name();
-    let mut values = query
+    named_values(query, parameter.field(), |_| true)
+}
+
+// a list collects every value of a repeated name, a single value takes the last one like Starlette, if `keep` keeps it
+fn named_values(
+    pairs: &[(Cow<'_, str>, Cow<'_, str>)],
+    field: &Field,
+    keep: impl Fn(&str) -> bool,
+) -> Option<Value> {
+    let mut values = pairs
         .iter()
-        .filter(|(found, _)| found == name)
-        .map(|(_, value)| Value::from(value.as_ref()));
-    if parameter.field().schema().is_array() {
-        list(values)
+        .filter(|(found, _)| found == field.name())
+        .map(|(_, value)| value.as_ref());
+    if field.schema().is_array() {
+        list(values.map(Value::from))
     } else {
-        values.next_back()
+        values
+            .next_back()
+            .filter(|value| keep(value))
+            .map(Value::from)
     }
 }
 
@@ -168,6 +194,22 @@ fn list(values: impl Iterator<Item = Value>) -> Option<Value> {
     (!values.is_empty()).then_some(Value::Array(values))
 }
 
+// the declared fields as an object of strings; like Starlette, a body of another content type is an empty form
+fn form_input(schema: &Schema, body: &[u8], content: Content) -> Value {
+    let text = match content {
+        Content::Form => decode_latin1(body),
+        Content::Json | Content::Other => Cow::Borrowed(""),
+    };
+    let pairs = parse_query(&text);
+    let fields = schema.fields().unwrap_or_default();
+    // like FastAPI, an empty value is missing, though a list keeps its empty items
+    let members = fields.iter().filter_map(|field| {
+        named_values(&pairs, field, |value| !value.is_empty())
+            .map(|value| (field.name().to_owned(), value))
+    });
+    Value::Object(members.collect())
+}
+
 // FastAPI parses the body as JSON when the content type says JSON or is missing, and passes it on as text otherwise
 fn parse_body(body: &[u8], is_json: bool) -> Result<Option<Value>, Vec<ValidationError>> {
     if body.is_empty() {
@@ -183,14 +225,14 @@ fn parse_body(body: &[u8], is_json: bool) -> Result<Option<Value>, Vec<Validatio
         .map_err(|error| vec![json_invalid(body, &error)])
 }
 
-pub(super) fn declares_json(request: &Request) -> bool {
+pub(super) fn content(request: &Request) -> Content {
     // FastAPI checks `if not content_type`, so an empty header counts as missing
     let Some(content_type) = request
         .headers()
         .get(CONTENT_TYPE)
         .filter(|value| !value.is_empty())
     else {
-        return true;
+        return Content::Json;
     };
     let media_type = content_type
         .to_str()
@@ -200,9 +242,11 @@ pub(super) fn declares_json(request: &Request) -> bool {
         .unwrap_or_default()
         .trim()
         .to_ascii_lowercase();
-    media_type
-        .strip_prefix("application/")
-        .is_some_and(|subtype| subtype == "json" || subtype.ends_with("+json"))
+    match media_type.strip_prefix("application/") {
+        Some("x-www-form-urlencoded") => Content::Form,
+        Some(subtype) if subtype == "json" || subtype.ends_with("+json") => Content::Json,
+        _ => Content::Other,
+    }
 }
 
 fn json_invalid(body: &[u8], error: &serde_json::Error) -> ValidationError {
@@ -293,7 +337,7 @@ mod tests {
         request: &Request,
     ) -> Result<Arguments, Vec<ValidationError>> {
         let inputs = inputs(description);
-        let body = read_body(&inputs, request.body(), declares_json(request))?;
+        let body = read_body(&inputs, request.body(), content(request))?;
         extract_arguments(&inputs, path_parameters, request, body)
     }
 
@@ -416,6 +460,101 @@ mod tests {
 
             assert_eq!(arguments.body(), Some(&json!(5)), "{content_type:?}");
         }
+    }
+
+    fn with_form(fields: impl IntoIterator<Item = Field>) -> RouteDescription {
+        RouteDescription::new(Method::POST, "/login").form_body(Schema::object(fields))
+    }
+
+    const FORM: Option<&str> = Some("application/x-www-form-urlencoded");
+
+    #[test]
+    fn reads_form_fields_coerced_from_their_strings() {
+        let description = with_form([
+            Field::new("name", Schema::string()),
+            Field::new("count", Schema::integer()),
+            Field::new("tags", Schema::array(Schema::string())),
+        ]);
+        let body = "tags=a&name=big+anvil%21&count=3&tags=&tags=b&other=1";
+
+        let arguments = extract(&description, &request("/login", FORM, body)).unwrap();
+
+        assert_eq!(
+            arguments.body(),
+            Some(&json!({"name": "big anvil!", "count": 3, "tags": ["a", "", "b"]}))
+        );
+    }
+
+    #[test]
+    fn a_repeated_form_field_takes_the_last_value_like_starlette() {
+        let description = with_form([Field::new("name", Schema::string())]);
+        let request = request(
+            "/login",
+            Some("Application/X-WWW-Form-Urlencoded; x=y"),
+            "name=a&name=b",
+        );
+
+        let arguments = extract(&description, &request).unwrap();
+
+        assert_eq!(arguments.body(), Some(&json!({"name": "b"})));
+    }
+
+    #[test]
+    fn an_empty_form_value_is_missing_like_fastapi() {
+        let required = with_form([
+            Field::new("name", Schema::string()),
+            Field::new("count", Schema::integer()),
+        ]);
+        let defaulted = with_form([
+            Field::new("name", Schema::string()).with_default("guest"),
+            Field::new("tags", Schema::array(Schema::string())).optional(),
+        ]);
+
+        let missing = extract(&required, &request("/login", FORM, "name=&count=3"));
+        let default = extract(&defaulted, &request("/login", FORM, "name=")).unwrap();
+
+        assert_eq!(
+            missing.err(),
+            Some(vec![ValidationError::at(
+                ErrorKind::Missing,
+                json!(["body", "name"]),
+                json!({"count": "3"})
+            )])
+        );
+        assert_eq!(
+            default.body(),
+            Some(&json!({"name": "guest", "tags": null}))
+        );
+    }
+
+    #[test]
+    fn a_body_of_another_content_type_is_an_empty_form_like_starlette() {
+        let description = with_form([Field::new("name", Schema::string())]);
+
+        for content_type in [None, Some("application/json"), Some("text/plain")] {
+            let read = extract(&description, &request("/login", content_type, "name=a"));
+
+            assert_eq!(
+                read.err(),
+                Some(vec![ValidationError::at(
+                    ErrorKind::Missing,
+                    json!(["body", "name"]),
+                    json!({})
+                )]),
+                "{content_type:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_json_body_sent_as_a_form_is_text() {
+        let text = extract(
+            &with_body(Schema::string()),
+            &request("/items", FORM, "name=a"),
+        )
+        .unwrap();
+
+        assert_eq!(text.body(), Some(&json!("name=a")));
     }
 
     #[test]

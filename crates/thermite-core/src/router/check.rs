@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
 use super::path::PathPattern;
-use crate::decoder::Decoder;
 use crate::description::{
-    Body, Declarations, Parameter, ParameterLocation, ResponseDescription, RouteDescription,
+    Body, BodyEncoding, Declarations, Parameter, ParameterLocation, ResponseDescription,
+    RouteDescription,
 };
 use crate::route_error::{RouteError, SchemaLocation};
 use crate::schema::Schema;
@@ -14,7 +14,7 @@ use crate::security::SecuritySchemeDescription;
 pub(super) struct Inputs {
     pub(super) parameters: Vec<Parameter>,
     pub(super) body: Option<Schema>,
-    pub(super) decoder: Option<Decoder>,
+    pub(super) encoding: BodyEncoding,
     // like FastAPI, body errors follow the values of the group that declared the body
     pub(super) body_position: usize,
 }
@@ -49,6 +49,9 @@ pub(super) fn check_description(
     }
     if let Some(body) = &inputs.body {
         check_schema(body, SchemaLocation::Body, &path)?;
+        if inputs.encoding == BodyEncoding::Form {
+            check_form_fields(body, &path)?;
+        }
     }
     for response in &responses {
         if let Some(schema) = response.schema() {
@@ -112,15 +115,22 @@ fn flatten(declarations: Declarations, path: &str, inputs: &mut Inputs) -> Resul
     }
     match (body, &inputs.body) {
         (Body::NotDeclared, _) => Ok(()),
-        (Body::Declared(schema, decoder), None) => {
+        (Body::Declared(schema, encoding), None) => {
             inputs.body = Some(schema);
-            inputs.decoder = decoder;
+            inputs.encoding = encoding;
             inputs.body_position = inputs.parameters.len();
             Ok(())
         }
         // a decoded body can be taken only once, so a body read in two places is validated instead
-        (Body::Declared(schema, _), Some(earlier)) if schema == *earlier => {
-            inputs.decoder = None;
+        (Body::Declared(schema, BodyEncoding::Json(_)), Some(earlier))
+            if schema == *earlier && matches!(inputs.encoding, BodyEncoding::Json(_)) =>
+        {
+            inputs.encoding = BodyEncoding::Json(None);
+            Ok(())
+        }
+        (Body::Declared(schema, BodyEncoding::Form), Some(earlier))
+            if schema == *earlier && inputs.encoding == BodyEncoding::Form =>
+        {
             Ok(())
         }
         (Body::Declared(..), Some(_)) | (Body::DeclaredTwice, _) => {
@@ -128,6 +138,25 @@ fn flatten(declarations: Declarations, path: &str, inputs: &mut Inputs) -> Resul
                 path: path.to_owned(),
             })
         }
+    }
+}
+
+// a form value is text, so a field can only be a scalar or a list of them, as in the query
+fn check_form_fields(body: &Schema, path: &str) -> Result<(), RouteError> {
+    let Some(fields) = body.fields() else {
+        return Err(RouteError::FormBodyNotObject {
+            path: path.to_owned(),
+        });
+    };
+    match fields
+        .iter()
+        .find(|field| !field.schema().is_scalar_or_list_of_scalars())
+    {
+        Some(field) => Err(RouteError::UnsupportedFormFieldType {
+            path: path.to_owned(),
+            name: field.name().to_owned(),
+        }),
+        None => Ok(()),
     }
 }
 
@@ -445,6 +474,79 @@ mod tests {
                 check(&description),
                 Err(RouteError::DuplicateBody {
                     path: "/items".to_owned()
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn a_form_body_is_an_object_of_fields() {
+        let model = Schema::model("Login", [Field::new("name", Schema::string())]);
+        let form = items("/login").form_body(model.clone());
+
+        assert_eq!(flattened(&form).unwrap().body, Some(model));
+        for schema in [
+            Schema::string(),
+            Schema::array(Schema::string()),
+            Schema::any(),
+        ] {
+            assert_eq!(
+                check(&items("/login").form_body(schema)),
+                Err(RouteError::FormBodyNotObject {
+                    path: "/login".to_owned()
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn a_form_field_is_a_scalar_or_a_list_of_scalars() {
+        let address = Schema::model("Address", [Field::new("city", Schema::string())]);
+        let fields = [
+            Field::new("name", Schema::string()),
+            Field::new("tags", Schema::array(Schema::integer())),
+        ];
+        let valid = items("/login").form_body(Schema::object(fields.clone()));
+
+        assert!(check(&valid).is_ok());
+        for schema in [
+            address.clone(),
+            Schema::array(address),
+            Schema::array(Schema::array(Schema::string())),
+        ] {
+            let nested = fields
+                .iter()
+                .cloned()
+                .chain([Field::new("address", schema)]);
+            assert_eq!(
+                check(&items("/login").form_body(Schema::object(nested))),
+                Err(RouteError::UnsupportedFormFieldType {
+                    path: "/login".to_owned(),
+                    name: "address".to_owned()
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn a_body_read_in_two_places_must_be_read_the_same_way() {
+        let login = || Schema::object([Field::new("name", Schema::string())]);
+        let twice = items("/login")
+            .dependency(|dependency| dependency.form_body(login()))
+            .form_body(login());
+        let json_then_form = items("/login")
+            .dependency(|dependency| dependency.body(login()))
+            .form_body(login());
+        let form_then_json = items("/login")
+            .dependency(|dependency| dependency.form_body(login()))
+            .body(login());
+
+        assert_eq!(flattened(&twice).unwrap().encoding, BodyEncoding::Form);
+        for description in [json_then_form, form_then_json] {
+            assert_eq!(
+                check(&description),
+                Err(RouteError::DuplicateBody {
+                    path: "/login".to_owned()
                 })
             );
         }

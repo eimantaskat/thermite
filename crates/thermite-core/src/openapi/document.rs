@@ -145,11 +145,11 @@ fn describe<'router>(
     if !parameters.is_empty() {
         described.insert("parameters".to_owned(), Value::Array(parameters));
     }
-    if let Some(body) = operation.body {
+    if let Some((body, encoding)) = operation.body {
         described.insert(
             "requestBody".to_owned(),
             json!({
-                "content": { "application/json": { "schema": body.json_schema(components)? } },
+                "content": { encoding.media_type(): { "schema": body.json_schema(components)? } },
                 "required": true
             }),
         );
@@ -498,6 +498,23 @@ mod tests {
                 "200": { "description": "Successful Response", "content": json_content(json!({})) },
                 "404": { "description": "Item not found" },
                 "409": { "description": "Taken", "content": json_content(reference("Conflict")) }
+            })
+        );
+    }
+
+    #[test]
+    fn documents_a_form_body_under_its_media_type() {
+        let login = Schema::model("Login", [Field::new("name", Schema::string())]);
+
+        let document = document(items().form_body(login)).unwrap();
+
+        assert_eq!(
+            document["paths"]["/items"]["post"]["requestBody"],
+            json!({
+                "content": {
+                    "application/x-www-form-urlencoded": { "schema": reference("Login") }
+                },
+                "required": true
             })
         );
     }

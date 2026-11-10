@@ -5,6 +5,7 @@ mod dependencies;
 mod derive;
 mod exceptions;
 mod extractors;
+mod forms;
 mod middleware;
 mod openapi;
 mod responses;

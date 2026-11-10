@@ -39,6 +39,10 @@ pub enum RouteError {
     InvalidApiKeyHeader { path: String, name: String },
     #[error("`{path}` declares more than one body")]
     DuplicateBody { path: String },
+    #[error("the form body of `{path}` must be an object, whose fields are the form's")]
+    FormBodyNotObject { path: String },
+    #[error("form field `{name}` of `{path}` must be a scalar or a list of scalars")]
+    UnsupportedFormFieldType { path: String, name: String },
     #[error("{location} of `{path}` has the field `{name}` more than once in one object")]
     DuplicateField {
         path: String,
