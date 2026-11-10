@@ -219,6 +219,68 @@ async fn closes_connections_that_stop_sending_headers() -> TestResult {
 }
 
 #[tokio::test]
+async fn closes_idle_keep_alive_connections_after_the_header_read_timeout() -> TestResult {
+    let server = RunningServer::start_configured(
+        |server| server.with_header_read_timeout(Duration::from_millis(100)),
+        |_request: Request| async { text_response(StatusCode::OK, "") },
+    )
+    .await?;
+
+    let mut stream = TcpStream::connect(server.address).await?;
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\n\r\n")
+        .await?;
+    let mut response = Vec::new();
+    let read = timeout(TEST_TIMEOUT, stream.read_to_end(&mut response)).await;
+
+    assert!(
+        read.is_ok(),
+        "idle connection still open after the header read timeout"
+    );
+    assert!(response.starts_with(b"HTTP/1.1 200"), "{response:?}");
+    server.stop().await
+}
+
+#[tokio::test]
+async fn waits_for_headers_without_limit_when_the_timeout_is_off() -> TestResult {
+    let server = RunningServer::start_configured(
+        |server| {
+            server
+                .with_header_read_timeout(Duration::from_millis(50))
+                .with_header_read_timeout(None)
+        },
+        |_request: Request| async { text_response(StatusCode::OK, "") },
+    )
+    .await?;
+
+    let mut stream = TcpStream::connect(server.address).await?;
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nhost: localhost\r\n")
+        .await?;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    stream.write_all(b"connection: close\r\n\r\n").await?;
+    let mut response = Vec::new();
+    timeout(TEST_TIMEOUT, stream.read_to_end(&mut response)).await??;
+
+    assert!(response.starts_with(b"HTTP/1.1 200"), "{response:?}");
+    server.stop().await
+}
+
+#[tokio::test]
+async fn answers_when_the_header_read_timeout_is_too_long_to_reach() -> TestResult {
+    let server = RunningServer::start_configured(
+        |server| server.with_header_read_timeout(Duration::MAX),
+        |_request: Request| async { text_response(StatusCode::OK, "answered") },
+    )
+    .await?;
+
+    let response = reqwest::get(server.url("/")).await?;
+
+    assert_eq!(response.text().await?, "answered");
+    server.stop().await
+}
+
+#[tokio::test]
 async fn answers_500_and_keeps_serving_when_a_handler_panics() -> TestResult {
     let server = RunningServer::start(|request: Request| {
         let path = request.uri().path().to_owned();

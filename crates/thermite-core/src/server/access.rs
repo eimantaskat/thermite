@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::time::Instant;
 
 use http::{Method, StatusCode, Uri, Version};
+use tracing::Level;
 
 const TARGET: &str = "thermite::access";
 
@@ -15,14 +16,20 @@ pub(super) struct AccessLog {
 }
 
 impl AccessLog {
-    pub(super) fn start<Body>(client: SocketAddr, request: &http::Request<Body>) -> Self {
-        Self {
+    // None when no subscriber wants the event, so the copies and the clock are skipped too
+    pub(super) fn start<Body>(client: SocketAddr, request: &http::Request<Body>) -> Option<Self> {
+        let wanted = tracing::enabled!(
+            target: TARGET,
+            Level::INFO,
+            { client, method, path, version, status, duration_ms }
+        );
+        wanted.then(|| Self {
             client,
             method: request.method().clone(),
             uri: request.uri().clone(),
             version: request.version(),
             started: Instant::now(),
-        }
+        })
     }
 
     pub(super) fn finish(self, status: StatusCode) {

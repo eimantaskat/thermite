@@ -37,6 +37,8 @@ pub use in_process::{InProcessServer, InProcessWebSocket, WebSocketHandshake};
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
+// hyper adds the timeout to the current time, which panics on overflow; a longer wait is no limit anyway
+const LONGEST_HEADER_READ_TIMEOUT: Duration = Duration::from_hours(365 * 24);
 const DEFAULT_BODY_LIMIT: usize = 2 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
@@ -56,7 +58,7 @@ pub enum ServerError {
 pub struct Server {
     listener: TcpListener,
     shutdown_timeout: Duration,
-    header_read_timeout: Duration,
+    header_read_timeout: Option<Duration>,
     body_limit: usize,
 }
 
@@ -86,7 +88,7 @@ impl Server {
         Self {
             listener,
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
-            header_read_timeout: DEFAULT_HEADER_READ_TIMEOUT,
+            header_read_timeout: Some(DEFAULT_HEADER_READ_TIMEOUT),
             body_limit: DEFAULT_BODY_LIMIT,
         }
     }
@@ -97,9 +99,12 @@ impl Server {
         self
     }
 
+    // it also closes keep-alive connections left idle that long; None turns it off, as behind a gateway
     #[must_use]
-    pub fn with_header_read_timeout(mut self, timeout: Duration) -> Self {
-        self.header_read_timeout = timeout;
+    pub fn with_header_read_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
+        self.header_read_timeout = timeout
+            .into()
+            .filter(|timeout| *timeout <= LONGEST_HEADER_READ_TIMEOUT);
         self
     }
 
@@ -217,7 +222,9 @@ fn serve_connection<Handler: RequestHandler>(
             let access = AccessLog::start(peer_address, &request);
             let upgrade = request.extensions_mut().remove::<OnUpgrade>();
             let mut response = handle_request(&handler, request, body_limit).await;
-            access.finish(response.status());
+            if let Some(access) = access {
+                access.finish(response.status());
+            }
             if let (Some(session), Some(upgrade)) = (take_session(&mut response), upgrade) {
                 let _ = sent.send(Box::pin(run_session(session, upgrade, shutdown)));
             }
