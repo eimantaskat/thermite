@@ -185,7 +185,7 @@ impl Docs {
             .pages
             .iter()
             .find(|page| page.path == request.uri().path())?;
-        let mut response = Response::new(page.body.clone());
+        let mut response = Response::new(page.body.clone().into());
         response
             .headers_mut()
             .insert(CONTENT_TYPE, HeaderValue::from_static(page.content_type));
@@ -267,7 +267,7 @@ mod tests {
         for description in descriptions {
             router
                 .route(description, |_: Request, _: Arguments| async {
-                    Response::new(Bytes::new())
+                    Response::default()
                 })
                 .unwrap();
         }

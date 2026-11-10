@@ -56,7 +56,7 @@ async fn passes_validated_path_query_and_body_values_to_the_handler() -> TestRes
                 "active": arguments.query("active"),
                 "body": arguments.body(),
             });
-            Response::new(Bytes::from(echoed.to_string()))
+            Response::new(Bytes::from(echoed.to_string()).into())
         },
     )?;
     let server = RunningServer::start(router).await?;

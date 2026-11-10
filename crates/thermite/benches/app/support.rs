@@ -32,7 +32,9 @@ pub fn bench_send(
     expected: StatusCode,
     request: impl Fn() -> Request,
 ) {
-    let response = runtime.block_on(server.send(request()));
+    let response = runtime
+        .block_on(server.send(request()))
+        .expect("a body that is read whole");
     assert_eq!(response.status(), expected, "{name}");
     group.bench_function(name, |bencher| {
         bencher.to_async(runtime).iter_batched(

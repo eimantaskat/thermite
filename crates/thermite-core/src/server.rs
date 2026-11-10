@@ -12,7 +12,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bytes::Bytes;
 use http::StatusCode;
 use http_body_util::{BodyExt, LengthLimitError, Limited};
 use hyper::body::{Body, Incoming};
@@ -324,7 +323,7 @@ fn content_too_large() -> Response {
 }
 
 fn status_response(status: StatusCode) -> Response {
-    let mut response = Response::new(Bytes::new());
+    let mut response = Response::default();
     *response.status_mut() = status;
     response
 }

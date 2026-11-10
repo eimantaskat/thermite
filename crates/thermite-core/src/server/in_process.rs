@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use futures_util::FutureExt;
-use http::header::CONTENT_LENGTH;
+use http::header::{CONTENT_LENGTH, TRANSFER_ENCODING};
 use http::{HeaderMap, HeaderValue, Method, StatusCode};
 use tokio::task::{JoinError, JoinHandle};
 use tokio_tungstenite::tungstenite::protocol::Role;
@@ -12,10 +12,15 @@ use tokio_tungstenite::tungstenite::protocol::Role;
 use super::panic::{call_catching_panics, run_catching_panics, run_session_catching_panics};
 use super::{DEFAULT_BODY_LIMIT, ServerError, content_too_large};
 use crate::background::{run_in_order, take_background_tasks};
+use crate::body::{Body, BodyError};
 use crate::handler::{Request, RequestHandler, Response};
 use crate::websocket::{
     CLOSE_TIMEOUT, CloseCode, Message, Shutdown, Socket, WebSocketDisconnect, take_session,
 };
+
+mod streamed;
+
+use streamed::Streamed;
 
 // enough for the frames of one message to pass without the two ends waiting on each other often
 const PIPE_CAPACITY: usize = 64 * 1024;
@@ -63,10 +68,20 @@ impl<Handler: RequestHandler> InProcessServer<Handler> {
         self
     }
 
-    pub async fn send(&self, request: Request) -> Response {
+    // the body read whole, so a stream that fails gives its error instead of the response
+    pub async fn send(&self, request: Request) -> Result<http::Response<Bytes>, BodyError> {
+        let (parts, body) = self.send_streaming(request).await.into_parts();
+        Ok(http::Response::from_parts(parts, body.into_bytes().await?))
+    }
+
+    // the body left to be read chunk by chunk, running the background tasks once it ends
+    pub async fn send_streaming(&self, request: Request) -> Response {
         let head = request.method() == Method::HEAD;
-        let response = self.call(request).await;
-        self.finish(response, head).await
+        let mut response = self.call(request).await;
+        frame_like_hyper(&mut response, head);
+        let tasks = take_background_tasks(&mut response);
+        let panics = self.panics;
+        response.map(|body| Body::from_stream(Streamed::new(body, tasks, panics)))
     }
 
     // the WebSocket runs over an in-memory pipe, so both ends speak the protocol as on the wire
@@ -218,13 +233,30 @@ fn frame_like_hyper(response: &mut Response, head: bool) {
     let bodiless = status.is_informational()
         || status == StatusCode::NO_CONTENT
         || status == StatusCode::NOT_MODIFIED;
+    // hyper keeps a transfer encoding only on a response it sends a body with
+    if head || bodiless {
+        response.headers_mut().remove(TRANSFER_ENCODING);
+    }
+    let framed = [CONTENT_LENGTH, TRANSFER_ENCODING]
+        .iter()
+        .any(|header| response.headers().contains_key(header));
     if bodiless {
         response.headers_mut().remove(CONTENT_LENGTH);
-    } else if !response.headers().contains_key(CONTENT_LENGTH) {
-        let length = HeaderValue::from(response.body().len());
-        response.headers_mut().insert(CONTENT_LENGTH, length);
+    } else if !framed {
+        match response.body().as_bytes() {
+            Some(body) => {
+                let length = HeaderValue::from(body.len());
+                response.headers_mut().insert(CONTENT_LENGTH, length);
+            }
+            // nor does hyper frame a stream it will not send
+            None if head => {}
+            None => {
+                let chunked = HeaderValue::from_static("chunked");
+                response.headers_mut().insert(TRANSFER_ENCODING, chunked);
+            }
+        }
     }
     if head || bodiless {
-        *response.body_mut() = Bytes::new();
+        *response.body_mut() = Body::empty();
     }
 }

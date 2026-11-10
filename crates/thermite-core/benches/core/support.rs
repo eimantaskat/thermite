@@ -18,7 +18,7 @@ pub fn request(builder: http::request::Builder, body: impl Into<Bytes>) -> Reque
 }
 
 pub async fn answer_ok(_: Request, _: Arguments) -> Response {
-    Response::new(Bytes::from_static(b"ok"))
+    Response::new(Bytes::from_static(b"ok").into())
 }
 
 pub fn router(descriptions: impl IntoIterator<Item = thermite_core::RouteDescription>) -> Router {

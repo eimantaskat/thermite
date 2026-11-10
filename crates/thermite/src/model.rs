@@ -120,6 +120,47 @@ impl<T: ToSchema> ToSchema for Vec<T> {
     }
 }
 
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` has no plain default",
+    label = "`#[model(default)]` needs a type with a plain default",
+    note = "give the value instead, as `#[model(default = ...)]`"
+)]
+pub trait DefaultValue {
+    // what a field of this type holds when the request leaves it out, as a JSON value
+    fn default_value() -> Value;
+}
+
+impl DefaultValue for String {
+    fn default_value() -> Value {
+        Value::from("")
+    }
+}
+
+impl DefaultValue for i64 {
+    fn default_value() -> Value {
+        Value::from(0)
+    }
+}
+
+impl DefaultValue for f64 {
+    fn default_value() -> Value {
+        Value::from(0.0)
+    }
+}
+
+impl DefaultValue for bool {
+    fn default_value() -> Value {
+        Value::from(false)
+    }
+}
+
+// empty whatever the items are, so a list of files, which have no JSON value, takes it too
+impl<T> DefaultValue for Vec<T> {
+    fn default_value() -> Value {
+        Value::Array(Vec::new())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::panic;

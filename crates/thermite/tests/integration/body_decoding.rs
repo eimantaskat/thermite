@@ -50,7 +50,7 @@ impl<T: ToSchema + DeserializeOwned + Send> FromRequest for Validated<T> {
     ) -> impl Future<Output = Result<Self, Response>> + Send {
         let body = arguments.body().unwrap_or(&Value::Null);
         ready(T::deserialize(body).map(Self).map_err(|_| {
-            let mut response = Response::new(Bytes::new());
+            let mut response = Response::default();
             *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
             response
         }))

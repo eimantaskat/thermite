@@ -13,7 +13,7 @@ use crate::support::{RunningServer, TestResult};
 struct Upload {
     title: String,
     file: UploadFile,
-    #[model(default = Vec::<String>::new())]
+    #[model(default)]
     extra: Vec<UploadFile>,
     note: Option<UploadFile>,
 }

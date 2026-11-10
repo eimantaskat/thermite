@@ -6,9 +6,10 @@ use std::sync::Arc;
 use bytes::Bytes;
 
 use crate::arguments::Arguments;
+use crate::body::Body;
 
 pub type Request = http::Request<Bytes>;
-pub type Response = http::Response<Bytes>;
+pub type Response = http::Response<Body>;
 
 // the server holds the handler in an Arc, which a 'static future such as a middleware's Next can keep
 pub trait RequestHandler: Send + Sync + 'static {

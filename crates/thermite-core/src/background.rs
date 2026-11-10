@@ -59,7 +59,6 @@ pub(crate) async fn run_in_order(tasks: Vec<Task>) {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
 
     use super::*;
 
@@ -76,7 +75,7 @@ mod tests {
             }
         };
         let tasks = BackgroundTasks::new();
-        let mut response = Response::new(Bytes::new());
+        let mut response = Response::default();
 
         tasks.add(record("first"));
         attach_background_tasks(&mut response, tasks.clone());

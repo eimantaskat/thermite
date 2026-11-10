@@ -475,7 +475,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(response.headers()["content-type"], "application/json");
         assert_eq!(
-            response.body(),
+            response.body().as_bytes().unwrap(),
             concat!(
                 r#"{"detail":["#,
                 r#"{"type":"string_type","loc":["body","tags",1],"msg":"Input should be a valid string","input":5},"#,
@@ -513,7 +513,7 @@ mod tests {
             .collect();
 
         let response = validation_failed(errors);
-        let body: Value = serde_json::from_slice(response.body()).unwrap();
+        let body: Value = serde_json::from_slice(response.body().as_bytes().unwrap()).unwrap();
         let error = response_error(&response)
             .and_then(|error| error.downcast_ref::<RequestValidationError>())
             .unwrap();

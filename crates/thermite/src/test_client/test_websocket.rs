@@ -62,9 +62,13 @@ impl<'client> TestWebSocketRequest<'client> {
         }
         match server.connect(request).await {
             WebSocketHandshake::Accepted(socket) => Ok(TestWebSocket(socket)),
-            WebSocketHandshake::Denied(response) => Err(TestWebSocketError::Denied(Box::new(
-                TestResponse::new(response),
-            ))),
+            WebSocketHandshake::Denied(response) => {
+                let (head, body) = response.into_parts();
+                let body = body.into_bytes().await.map_err(TestRequestError::from)?;
+                Err(TestWebSocketError::Denied(Box::new(TestResponse::new(
+                    head, body,
+                ))))
+            }
         }
     }
 }

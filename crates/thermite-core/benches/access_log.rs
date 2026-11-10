@@ -82,7 +82,9 @@ fn access_log(criterion: &mut Criterion) {
     let address = runtime.block_on(async {
         let server = Server::bind("127.0.0.1:0").await.expect("a free port");
         let address = server.local_address().expect("the bound address");
-        tokio::spawn(server.serve(|_: Request| async { Response::new(Bytes::from_static(b"ok")) }));
+        tokio::spawn(
+            server.serve(|_: Request| async { Response::new(Bytes::from_static(b"ok").into()) }),
+        );
         address
     });
     let empty = Bytes::new();

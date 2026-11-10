@@ -5,10 +5,10 @@ use http::header::{CONTENT_LENGTH, CONTENT_TYPE, HOST};
 use http::request::Builder;
 use http::{HeaderName, HeaderValue, Method};
 use serde::Serialize;
-use thermite_core::{InProcessServer, Request};
+use thermite_core::{BodyError, InProcessServer, Request};
 
 use super::test_multipart::TestMultipart;
-use super::test_response::TestResponse;
+use super::test_response::{TestResponse, TestStreamingResponse};
 use crate::app::App;
 
 #[derive(Debug, thiserror::Error)]
@@ -20,6 +20,8 @@ pub enum TestRequestError {
     Http(#[from] http::Error),
     #[error("the body could not be written as JSON")]
     Body(#[from] serde_json::Error),
+    #[error("the response body failed while it was streamed")]
+    ResponseBody(#[from] BodyError),
 }
 
 // a mistake is kept until send, so that the calls can still be chained
@@ -103,7 +105,17 @@ impl<'client> TestRequest<'client> {
     pub async fn send(self) -> Result<TestResponse, TestRequestError> {
         let server = self.server;
         let request = self.build()?;
-        Ok(TestResponse::new(server.send(request).await))
+        let (head, body) = server.send(request).await?.into_parts();
+        Ok(TestResponse::new(head, body))
+    }
+
+    // the response once its head is ready, its body left to be read chunk by chunk
+    pub async fn stream(self) -> Result<TestStreamingResponse, TestRequestError> {
+        let server = self.server;
+        let request = self.build()?;
+        Ok(TestStreamingResponse::new(
+            server.send_streaming(request).await,
+        ))
     }
 
     pub(super) fn server(&self) -> &'client InProcessServer<App> {

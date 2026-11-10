@@ -2,6 +2,7 @@
 
 mod arguments;
 mod background;
+mod body;
 mod decoder;
 mod description;
 mod handler;
@@ -21,6 +22,7 @@ mod websocket;
 
 pub use arguments::Arguments;
 pub use background::{BackgroundTasks, attach_background_tasks};
+pub use body::{Body, BodyError, BoxError};
 pub use decoder::BodyDecoder;
 pub use description::{Parameter, ParameterLocation, ResponseDescription, RouteDescription};
 pub use handler::{Request, RequestHandler, Response, RouteHandler};

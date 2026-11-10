@@ -21,7 +21,7 @@ fn echoing_parameter(name: &'static str) -> impl RouteHandler {
             .and_then(|value| value.as_str())
             .unwrap_or("<missing>")
             .to_owned();
-        Response::new(Bytes::from(value))
+        Response::new(Bytes::from(value).into())
     }
 }
 
@@ -226,11 +226,7 @@ async fn serves_a_prefixed_route_with_the_path_parameters_of_prefix_and_route() 
                     .and_then(|value| value.as_str())
                     .unwrap_or("")
             };
-            Response::new(Bytes::from(format!(
-                "{} {}",
-                value("user_id"),
-                value("item_id")
-            )))
+            Response::new(Bytes::from(format!("{} {}", value("user_id"), value("item_id"))).into())
         },
     )?;
     let server = RunningServer::start(router).await?;

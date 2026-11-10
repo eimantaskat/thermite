@@ -6,6 +6,7 @@ use syn::{
     Data, DeriveInput, Error, Field, Fields, GenericArgument, PathArguments, Type, parse_quote,
 };
 
+use crate::model_attributes::DefaultSetting;
 use crate::serde_attributes::{self, SerdeContainer};
 use crate::{attributes_named, model_attributes};
 
@@ -67,10 +68,19 @@ fn declare(field: &Field, container: &SerdeContainer) -> syn::Result<TokenStream
     let presence = match (optional_type, &model.default) {
         (None, None) => TokenStream::new(),
         (Some(_), None) => quote!(.optional()),
-        (None, Some(default)) => quote!(.with_default(#default)),
+        (None, Some(DefaultSetting::Value(default))) => quote!(.with_default(#default)),
+        (None, Some(DefaultSetting::OfType)) => {
+            let field_type = &field.ty;
+            quote_spanned!(field_type.span()=>
+                .with_default(<#field_type as ::thermite::DefaultValue>::default_value()))
+        }
         (Some(_), Some(default)) => {
-            return Err(Error::new_spanned(
-                default,
+            let span = match default {
+                DefaultSetting::Value(default) => default.span(),
+                DefaultSetting::OfType => field.span(),
+            };
+            return Err(Error::new(
+                span,
                 "an `Option` field is already optional, so it takes no default",
             ));
         }
@@ -225,18 +235,44 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_default_on_an_option_field() {
+    fn declares_a_plain_default_as_the_type_default() {
         let input = parse_quote! {
+            struct Filter {
+                #[model(default)]
+                tags: Vec<String>,
+            }
+        };
+
+        assert!(
+            expanded(&input).contains(
+                ". with_default (< Vec < String > as :: thermite :: DefaultValue > :: default_value ())"
+            ),
+            "{}",
+            expanded(&input)
+        );
+    }
+
+    #[test]
+    fn rejects_a_default_on_an_option_field() {
+        let valued = parse_quote! {
             struct Item {
                 #[model(default = 1)]
                 count: Option<i64>,
             }
         };
+        let plain = parse_quote! {
+            struct Item {
+                #[model(default)]
+                count: Option<i64>,
+            }
+        };
 
-        assert_eq!(
-            error(&input),
-            "an `Option` field is already optional, so it takes no default"
-        );
+        for input in [valued, plain] {
+            assert_eq!(
+                error(&input),
+                "an `Option` field is already optional, so it takes no default"
+            );
+        }
     }
 
     #[test]
@@ -266,6 +302,6 @@ mod tests {
             error(&serde_field),
             "`#[serde(skip)]` is not supported by `#[derive(Model)]`"
         );
-        assert_eq!(error(&model_field), "expected `default = ...`");
+        assert_eq!(error(&model_field), model_attributes::EXPECTED_DEFAULT);
     }
 }

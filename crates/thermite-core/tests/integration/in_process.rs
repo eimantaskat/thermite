@@ -1,11 +1,13 @@
+use std::convert::Infallible;
 use std::error::Error;
 use std::future::{Future, ready};
 use std::sync::Arc;
 
 use bytes::Bytes;
-use http::header::DATE;
+use futures_util::stream;
+use http::header::{DATE, TRANSFER_ENCODING};
 use http::{HeaderMap, HeaderValue, Method, StatusCode};
-use thermite_core::{InProcessServer, Request, RequestHandler, Response, ServerError};
+use thermite_core::{Body, InProcessServer, Request, RequestHandler, Response, ServerError};
 
 use crate::support::{Events, RunningServer, TestResult, text_response};
 
@@ -47,8 +49,27 @@ fn respond(path: &str) -> Response {
         "/no-content" => text_response(StatusCode::NO_CONTENT, "dropped"),
         "/not-modified" => text_response(StatusCode::NOT_MODIFIED, "dropped"),
         "/panic" => panic!("handler failed"),
+        "/streamed" => streamed(StatusCode::OK),
+        "/streamed-no-content" => streamed(StatusCode::NO_CONTENT),
+        "/streamed-not-modified" => streamed(StatusCode::NOT_MODIFIED),
+        "/chunked-whole" => chunked(text_response(StatusCode::OK, "whole")),
+        "/chunked-stream" => chunked(streamed(StatusCode::OK)),
         _ => text_response(StatusCode::OK, ""),
     }
+}
+
+fn streamed(status: StatusCode) -> Response {
+    let chunks = stream::iter(["one", "two"].map(Ok::<_, Infallible>));
+    let mut response = Response::new(Body::from_stream(chunks));
+    *response.status_mut() = status;
+    response
+}
+
+fn chunked(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(TRANSFER_ENCODING, HeaderValue::from_static("chunked"));
+    response
 }
 
 fn answering_by_path() -> impl RequestHandler {
@@ -90,7 +111,7 @@ async fn in_process(
             .method(method.clone())
             .uri(*path)
             .body(Bytes::from_static(body.as_bytes()))?;
-        let (parts, body) = server.send(request).await.into_parts();
+        let (parts, body) = server.send(request).await?.into_parts();
         seen.push(Seen::new(parts.status, &parts.headers, body));
     }
     server.stop().await;
@@ -107,6 +128,14 @@ async fn answers_in_process_as_the_server_does_over_the_wire() -> TestResult {
         (Method::GET, "/not-modified", ""),
         (Method::POST, "/created", "abcde"),
         (Method::GET, "/panic", ""),
+        (Method::GET, "/streamed", ""),
+        (Method::HEAD, "/streamed", ""),
+        (Method::GET, "/streamed-no-content", ""),
+        (Method::GET, "/streamed-not-modified", ""),
+        (Method::GET, "/chunked-whole", ""),
+        (Method::HEAD, "/chunked-whole", ""),
+        (Method::GET, "/chunked-stream", ""),
+        (Method::HEAD, "/chunked-stream", ""),
     ];
 
     assert_eq!(
@@ -168,7 +197,7 @@ async fn starts_the_handler_when_started_and_shuts_it_down_when_stopped() -> Tes
     })
     .await?;
 
-    server.send(Request::default()).await;
+    server.send(Request::default()).await?;
     server.stop().await;
 
     assert_eq!(events.recorded(), ["startup", "request", "shutdown"]);

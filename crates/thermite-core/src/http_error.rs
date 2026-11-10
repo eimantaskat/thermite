@@ -92,7 +92,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
         assert_eq!(response.headers()[CONTENT_TYPE], "application/json");
         assert_eq!(response.headers()[ALLOW], "GET");
-        assert_eq!(response.body(), r#"{"detail":"Method Not Allowed"}"#);
+        assert_eq!(
+            response.body().as_bytes(),
+            Some(&bytes::Bytes::from(r#"{"detail":"Method Not Allowed"}"#))
+        );
         let attached = response_error(&response).and_then(|error| error.downcast_ref());
         assert_eq!(attached, Some(&error));
     }

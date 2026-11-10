@@ -302,7 +302,6 @@ fn method_not_allowed(allowed: &[Method]) -> Response {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use bytes::Bytes;
 
     use super::*;
     use crate::security::ApiKeyLocation;
@@ -313,7 +312,7 @@ mod tests {
         router
             .route(
                 RouteDescription::new(Method::POST, "/items"),
-                |_request: Request, _arguments: Arguments| async { Response::new(Bytes::new()) },
+                |_request: Request, _arguments: Arguments| async { Response::default() },
             )
             .unwrap();
 
@@ -331,7 +330,7 @@ mod tests {
         );
 
         let outcome = router.route(description, |_: Request, _: Arguments| async {
-            Response::new(Bytes::new())
+            Response::default()
         });
 
         assert_eq!(

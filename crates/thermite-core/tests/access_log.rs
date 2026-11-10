@@ -7,7 +7,6 @@ use std::fmt::Debug;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use bytes::Bytes;
 use http::StatusCode;
 use thermite_core::{Request, Response, Server};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -88,7 +87,7 @@ async fn logs_one_event_per_request_with_what_uvicorn_shows() -> Result<(), Box<
     let address = server.local_address()?;
     let handler = |request: Request| async move {
         assert_ne!(request.uri().path(), "/panic", "handler failed");
-        Response::new(Bytes::new())
+        Response::default()
     };
     let task = tokio::spawn(server.serve(handler));
     let url = |path: &str| format!("http://{address}{path}");

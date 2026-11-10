@@ -42,7 +42,7 @@ async fn passes_method_uri_and_body_to_the_handler() -> TestResult {
             request.uri(),
             String::from_utf8_lossy(request.body())
         );
-        Response::new(Bytes::from(body))
+        Response::new(Bytes::from(body).into())
     })
     .await?;
 

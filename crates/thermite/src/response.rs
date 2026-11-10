@@ -123,6 +123,7 @@ pub(crate) fn internal_server_error() -> Response {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
     use thermite_core::Schema;
 
     use super::*;
@@ -190,7 +191,8 @@ mod tests {
             .headers()
             .get(CONTENT_TYPE)
             .and_then(|value| value.to_str().ok());
-        (response.status(), content_type, response.body())
+        let body = response.body().as_bytes().map_or(&[][..], AsRef::as_ref);
+        (response.status(), content_type, body)
     }
 
     #[test]
@@ -253,7 +255,10 @@ mod tests {
         let success: Result<&str, StatusCode> = Ok("found");
         let failure: Result<&str, StatusCode> = Err(StatusCode::NOT_FOUND);
 
-        assert_eq!(success.into_response().body(), "found");
+        assert_eq!(
+            success.into_response().body().as_bytes(),
+            Some(&Bytes::from("found"))
+        );
         assert_eq!(failure.into_response().status(), StatusCode::NOT_FOUND);
     }
 

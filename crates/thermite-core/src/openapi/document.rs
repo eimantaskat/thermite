@@ -381,7 +381,6 @@ fn validation_error() -> JsonSchema {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use bytes::Bytes;
     use http::Method;
 
     use super::*;
@@ -446,7 +445,7 @@ mod tests {
         for description in descriptions {
             router
                 .route(description, |_: Request, _: Arguments| async {
-                    Response::new(Bytes::new())
+                    Response::default()
                 })
                 .unwrap();
         }

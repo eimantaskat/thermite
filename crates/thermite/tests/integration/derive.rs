@@ -40,6 +40,36 @@ struct Tag {
 
 #[derive(Deserialize, Model)]
 #[allow(dead_code, reason = "only the derived fields are read")]
+struct Plain {
+    #[model(default)]
+    name: String,
+    #[model(default)]
+    count: i64,
+    #[model(default)]
+    ratio: f64,
+    #[model(default)]
+    done: bool,
+    #[model(default)]
+    tags: Vec<Tag>,
+}
+
+#[test]
+fn a_plain_default_is_the_empty_value_of_the_type() {
+    let tag = Schema::model("Tag", [Field::new("label", Schema::string())]);
+    assert_eq!(
+        Plain::fields(),
+        [
+            Field::new("name", Schema::string()).with_default(""),
+            Field::new("count", Schema::integer()).with_default(0),
+            Field::new("ratio", Schema::number()).with_default(0.0),
+            Field::new("done", Schema::boolean()).with_default(false),
+            Field::new("tags", Schema::array(tag)).with_default(Vec::<String>::new()),
+        ]
+    );
+}
+
+#[derive(Deserialize, Model)]
+#[allow(dead_code, reason = "only the derived fields are read")]
 struct Page<T> {
     items: Vec<T>,
     #[model(default = 1)]

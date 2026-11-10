@@ -172,7 +172,7 @@ mod tests {
 
         fn endpoint(&self, request: Request) -> impl Future<Output = Response> + Send {
             Self::record(&self.events, "endpoint");
-            ready(Response::new(Bytes::from(request.uri().path().to_owned())))
+            ready(Response::new(request.uri().path().to_owned().into()))
         }
     }
 
@@ -192,7 +192,7 @@ mod tests {
 
         let response = Next::start(&pipeline, request("/items")).await;
 
-        assert_eq!(response.body(), "/items");
+        assert_eq!(response.body().as_bytes().unwrap(), "/items");
         assert_eq!(
             *pipeline.events.lock().unwrap(),
             [
@@ -239,7 +239,7 @@ mod tests {
 
         let response = Next::start(&pipeline, request("/items")).await;
 
-        assert_eq!(response.body(), "/rewritten");
+        assert_eq!(response.body().as_bytes().unwrap(), "/rewritten");
     }
 
     #[tokio::test]
@@ -249,13 +249,16 @@ mod tests {
         pipeline
             .middleware
             .push(|_request: Request, next: Next| async move {
-                Response::new(Bytes::from(format!("{next:?}")))
+                Response::new(format!("{next:?}").into())
             });
         let shown_stack = format!("{:?}", pipeline.middleware);
 
         let response = Next::start(&Arc::new(pipeline), request("/")).await;
 
         assert_eq!(shown_stack, "MiddlewareStack { len: 2 }");
-        assert_eq!(response.body(), "Next { remaining: 1, .. }");
+        assert_eq!(
+            response.body().as_bytes().unwrap(),
+            "Next { remaining: 1, .. }"
+        );
     }
 }

@@ -1,0 +1,18 @@
+error[E0277]: `Tag` has no plain default
+  --> tests/derive_errors/plain_default_without_one.rs:12:10
+   |
+12 |     tag: Tag,
+   |          ^^^ `#[model(default)]` needs a type with a plain default
+   |
+help: the trait `DefaultValue` is not implemented for `Tag`
+  --> tests/derive_errors/plain_default_without_one.rs:5:1
+   |
+ 5 | struct Tag {
+   | ^^^^^^^^^^
+   = note: give the value instead, as `#[model(default = ...)]`
+   = help: the following other types implement trait `DefaultValue`:
+             Vec<T>
+             bool
+             f64
+             i64
+             std::string::String

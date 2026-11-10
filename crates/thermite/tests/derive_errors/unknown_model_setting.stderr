@@ -1,4 +1,4 @@
-error: expected `default = ...`
+error: expected `default` or `default = ...`
  --> tests/derive_errors/unknown_model_setting.rs:5:13
   |
 5 |     #[model(optional)]

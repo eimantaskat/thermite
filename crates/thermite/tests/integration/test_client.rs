@@ -434,7 +434,7 @@ async fn each_method_shortcut_sends_its_method() -> TestResult {
     ];
     let mut answered = Vec::new();
     for request in requests {
-        let response = request.send().await?.into_response();
+        let response = request.send().await?;
         let length = response.headers()["content-length"].to_str()?.to_owned();
         answered.push((response.body().clone(), length));
     }

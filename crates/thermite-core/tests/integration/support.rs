@@ -82,7 +82,7 @@ pub async fn send_raw(address: SocketAddr, request: &[u8]) -> Result<String, Box
 }
 
 pub fn text_response(status: StatusCode, body: &'static str) -> Response {
-    let mut response = Response::new(Bytes::from_static(body.as_bytes()));
+    let mut response = Response::new(Bytes::from_static(body.as_bytes()).into());
     *response.status_mut() = status;
     response
 }

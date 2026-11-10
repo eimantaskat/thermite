@@ -9,7 +9,7 @@ use http::header::{CONTENT_TYPE, SEC_WEBSOCKET_PROTOCOL};
 use http::{HeaderValue, Method, StatusCode, Version};
 use thermite_core::{
     Arguments, BackgroundTasks, CloseCode, InProcessServer, InProcessWebSocket, Message, Parameter,
-    Request, RequestHandler, RouteDescription, RouteError, Router, Schema, WebSocket,
+    Request, RequestHandler, Response, RouteDescription, RouteError, Router, Schema, WebSocket,
     WebSocketConnection, WebSocketDisconnect, WebSocketHandler, WebSocketHandshake,
     attach_background_tasks,
 };
@@ -58,7 +58,7 @@ async fn connect(
 async fn denied(
     handler: impl RequestHandler,
     request: Request,
-) -> Result<http::Response<Bytes>, Box<dyn std::error::Error>> {
+) -> Result<Response, Box<dyn std::error::Error>> {
     let server = InProcessServer::start(handler).await?.catch_panics();
     match server.connect(request).await {
         WebSocketHandshake::Accepted(_) => Err("the handshake was accepted".into()),
@@ -299,7 +299,10 @@ async fn a_denied_handshake_is_answered_with_the_response_once_the_handler_finis
     let response = denied(router(handler)?, handshake("/ws")).await?;
 
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(response.body(), "who are you");
+    assert_eq!(
+        response.body().as_bytes(),
+        Some(&Bytes::from("who are you"))
+    );
     assert_eq!(
         seen.recorded(),
         ["WebSocket { requested_subprotocols: [], .. }", "after"]
@@ -316,7 +319,7 @@ async fn a_handler_that_denies_as_it_returns_is_answered_with_its_response() -> 
     let response = denied(router(handler)?, handshake("/ws")).await?;
 
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    assert_eq!(response.body(), "no");
+    assert_eq!(response.body().as_bytes(), Some(&Bytes::from("no")));
     Ok(())
 }
 
@@ -346,7 +349,10 @@ async fn a_handler_that_never_decides_the_handshake_answers_500_like_uvicorn() -
         let response = denied(router, handshake("/ws")).await?;
 
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(response.body(), "Internal Server Error");
+        assert_eq!(
+            response.body().as_bytes(),
+            Some(&Bytes::from("Internal Server Error"))
+        );
     }
     Ok(())
 }
@@ -375,15 +381,18 @@ async fn whatever_keeps_a_websocket_from_being_accepted_answers_403_like_uvicorn
             response.headers()[CONTENT_TYPE],
             "text/plain; charset=utf-8"
         );
-        assert!(response.body().is_empty());
+        assert!(response.body().as_bytes().is_some_and(Bytes::is_empty));
     }
     let mut post = handshake("/rooms/1");
     *post.method_mut() = Method::POST;
     let plain_get = http::Request::builder()
         .uri("/rooms/1")
         .body(Bytes::new())?;
-    assert_eq!(server.send(post).await.status(), StatusCode::NOT_FOUND);
-    assert_eq!(server.send(plain_get).await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(server.send(post).await?.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        server.send(plain_get).await?.status(),
+        StatusCode::NOT_FOUND
+    );
     Ok(())
 }
 
@@ -429,7 +438,7 @@ async fn http_and_websocket_routes_share_a_path_but_not_a_table() -> TestResult 
     let server = InProcessServer::start(router).await?;
     let page = server
         .send(http::Request::builder().uri("/chat").body(Bytes::new())?)
-        .await;
+        .await?;
     assert_eq!(page.body(), "page");
     assert!(matches!(
         server.connect(handshake("/chat")).await,
@@ -878,7 +887,7 @@ async fn what_a_handler_does_after_denying_survives_its_response_being_replaced(
 
     let response = denied(replaces, handshake("/ws")).await?;
 
-    assert_eq!(response.body(), "replaced");
+    assert_eq!(response.body().as_bytes(), Some(&Bytes::from("replaced")));
     assert_eq!(seen.recorded(), ["after denying"]);
     Ok(())
 }

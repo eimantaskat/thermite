@@ -35,7 +35,7 @@ fn router() -> Result<Router, Box<dyn Error>> {
                 StatusCode::NOT_FOUND,
                 "Item not found",
             )),
-        |_: Request, _: Arguments| async { Response::new(Bytes::new()) },
+        |_: Request, _: Arguments| async { Response::default() },
     )?)
 }
 
@@ -44,7 +44,7 @@ fn documents_a_route_description_built_by_hand() -> Result<(), Box<dyn Error>> {
     let docs = Docs::new(&OpenApi::new().title("Items"), &router()?)?;
 
     let response = docs.respond(&get("/openapi.json")?).ok_or("no document")?;
-    let document: Value = serde_json::from_slice(response.body())?;
+    let document: Value = serde_json::from_slice(response.body().as_bytes().ok_or("a stream")?)?;
 
     assert_eq!(
         document["info"],

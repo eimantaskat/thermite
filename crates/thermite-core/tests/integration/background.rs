@@ -184,7 +184,7 @@ async fn send_in_process_returns_once_the_tasks_have_run() -> TestResult {
     let events = Events::default();
     let server = InProcessServer::start(AddingTasks::new(&events)).await?;
 
-    let response = server.send(get("/slow")?).await;
+    let response = server.send(get("/slow")?).await?;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(events.recorded(), ["request", "slow"]);
@@ -205,7 +205,7 @@ async fn a_panicking_task_reaches_the_caller_in_process_unless_caught() -> TestR
         async move { server.send(request).await }
     })
     .await;
-    let response = timeout(TEST_TIMEOUT, caught.send(get("/panics")?)).await?;
+    let response = timeout(TEST_TIMEOUT, caught.send(get("/panics")?)).await??;
 
     let Err(error) = outcome else {
         return Err("the panic did not reach the caller".into());
@@ -215,7 +215,7 @@ async fn a_panicking_task_reaches_the_caller_in_process_unless_caught() -> TestR
         Some(&"task failed")
     );
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.body().as_ref(), b"sent");
+    assert_eq!(response.body(), "sent");
     assert_eq!(
         events.recorded(),
         ["request", "before the panic", "request", "before the panic"]

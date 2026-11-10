@@ -10,7 +10,7 @@ use crate::app::App;
 
 pub use test_multipart::TestMultipart;
 pub use test_request::{TestRequest, TestRequestError};
-pub use test_response::TestResponse;
+pub use test_response::{TestResponse, TestStreamingResponse};
 pub use test_websocket::{TestWebSocket, TestWebSocketError, TestWebSocketRequest};
 
 // like `with TestClient(app)`: the app starts here, and its resources stop only in stop

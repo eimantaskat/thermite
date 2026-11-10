@@ -1,11 +1,15 @@
 use std::any::Any;
 use std::future::{Future, poll_fn};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::pin::pin;
+use std::pin::{Pin, pin};
 use std::sync::Arc;
-use std::task::Poll;
+use std::task::{Context, Poll};
+
+use bytes::Bytes;
+use futures_util::Stream;
 
 use crate::background::{Task, run_in_order};
+use crate::body::{Body, BoxError};
 use crate::handler::{Request, RequestHandler, Response};
 use crate::response::internal_server_error;
 use crate::websocket::CloseCode;
@@ -44,6 +48,23 @@ pub(super) async fn run_session_catching_panics(handler: Task) -> CloseCode {
             CloseCode::INTERNAL_ERROR
         }
     }
+}
+
+// a panic while streaming ends the body as an error does, which closes the connection
+pub(super) fn poll_catching_panics(
+    body: &mut Body,
+    cx: &mut Context<'_>,
+) -> Poll<Option<Result<Bytes, BoxError>>> {
+    catch_unwind(AssertUnwindSafe(|| Pin::new(&mut *body).poll_next(cx))).unwrap_or_else(
+        |payload| {
+            tracing::error!(
+                panic = message(payload.as_ref()),
+                "a response stream panicked"
+            );
+            *body = Body::empty();
+            Poll::Ready(Some(Err("the response stream panicked".into())))
+        },
+    )
 }
 
 async fn catching_panics<Started: Future>(

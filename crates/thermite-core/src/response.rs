@@ -5,10 +5,11 @@ use bytes::Bytes;
 use http::header::CONTENT_TYPE;
 use http::{HeaderValue, StatusCode};
 
+use crate::body::Body;
 use crate::handler::Response;
 
 pub(crate) fn json_response(status: StatusCode, body: impl Into<Bytes>) -> Response {
-    let mut response = Response::new(body.into());
+    let mut response = Response::new(Body::from(body.into()));
     *response.status_mut() = status;
     response
         .headers_mut()

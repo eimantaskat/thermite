@@ -1,6 +1,5 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
-use bytes::Bytes;
 use http::header::{
     CONNECTION, CONTENT_TYPE, HeaderName, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY,
     SEC_WEBSOCKET_PROTOCOL, SEC_WEBSOCKET_VERSION, UPGRADE,
@@ -75,7 +74,7 @@ pub(crate) fn requested_subprotocols(request: &Request) -> Vec<String> {
 }
 
 pub(crate) fn accepted(key: AcceptKey, subprotocol: Option<HeaderValue>) -> Response {
-    let mut response = Response::new(Bytes::new());
+    let mut response = Response::default();
     *response.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
     let headers = response.headers_mut();
     headers.insert(UPGRADE, HeaderValue::from_static("websocket"));
@@ -89,7 +88,7 @@ pub(crate) fn accepted(key: AcceptKey, subprotocol: Option<HeaderValue>) -> Resp
 
 // like uvicorn's answer to a WebSocket that is closed before it is accepted
 pub(crate) fn refusal(status: StatusCode) -> Response {
-    let mut response = Response::new(Bytes::new());
+    let mut response = Response::default();
     *response.status_mut() = status;
     response.headers_mut().insert(
         CONTENT_TYPE,
@@ -127,7 +126,7 @@ mod tests {
         for (name, value) in headers {
             builder = builder.header(*name, *value);
         }
-        builder.body(Bytes::new()).unwrap()
+        builder.body(bytes::Bytes::new()).unwrap()
     }
 
     fn valid() -> Vec<(&'static str, &'static str)> {
@@ -218,7 +217,7 @@ mod tests {
             let response = check_handshake(&request).unwrap_err().into_response();
 
             assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{keys:?}");
-            assert!(response.body().is_empty());
+            assert_eq!(response.body().as_bytes().map(bytes::Bytes::len), Some(0));
         }
     }
 
