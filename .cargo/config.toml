@@ -1,3 +1,0 @@
-# leaves libpython unlinked in every build, as maturin does, so cargo needs no Python development files
-[env]
-PYO3_BUILD_EXTENSION_MODULE = "1"

@@ -51,12 +51,6 @@ impl Arguments {
         self.body.as_ref()
     }
 
-    // for a handler that turns the body into something else and has no more use for it
-    #[must_use]
-    pub fn take_body(&mut self) -> Option<Value> {
-        self.body.take()
-    }
-
     // what the route's body decoder made, given out once; the body is then not also validated into `body`
     #[must_use]
     pub fn take_decoded_body(&self) -> Option<Box<dyn Any + Send>> {
@@ -101,15 +95,6 @@ mod tests {
         assert_eq!(arguments.header("x-token"), Some(&json!("secret")));
         assert_eq!(arguments.query("Limit"), Some(&json!(5)));
         assert_eq!(arguments.query("limit"), None);
-    }
-
-    #[test]
-    fn gives_out_the_body_once() {
-        let mut arguments = Arguments::new(Vec::new(), Some(json!({"id": 1})), None);
-
-        assert_eq!(arguments.take_body(), Some(json!({"id": 1})));
-        assert_eq!(arguments.take_body(), None);
-        assert!(arguments.body().is_none());
     }
 
     #[test]

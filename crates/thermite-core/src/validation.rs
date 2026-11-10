@@ -281,14 +281,15 @@ pub(crate) fn collect_all<T>(
     }
 }
 
-// the errors as pydantic lists them, built only when asked for, since the 422 body is written without them
+// FastAPI's RequestValidationError, whose errors are the `detail` of its 422
 #[derive(Debug, Clone)]
-struct ErrorList {
+pub struct RequestValidationError {
     errors: Vec<ValidationError>,
+    // built only when an exception handler asks, since the 422 body is written without them
     values: OnceLock<Vec<Value>>,
 }
 
-impl ErrorList {
+impl RequestValidationError {
     fn new(errors: Vec<ValidationError>) -> Self {
         Self {
             errors,
@@ -296,71 +297,30 @@ impl ErrorList {
         }
     }
 
-    fn values(&self) -> &[Value] {
+    #[must_use]
+    pub fn errors(&self) -> &[Value] {
         self.values
             .get_or_init(|| self.errors.iter().map(ValidationError::to_json).collect())
     }
-
-    fn describe(&self, formatter: &mut fmt::Formatter<'_>, place: &str) -> fmt::Result {
-        let count = self.errors.len();
-        let plural = if count == 1 { "" } else { "s" };
-        write!(formatter, "{count} validation error{plural} in the {place}")
-    }
 }
 
-impl PartialEq for ErrorList {
+impl PartialEq for RequestValidationError {
     fn eq(&self, other: &Self) -> bool {
         self.errors == other.errors
     }
 }
 
-impl Eq for ErrorList {}
-
-// FastAPI's RequestValidationError, whose errors are the `detail` of its 422
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RequestValidationError(ErrorList);
-
-impl RequestValidationError {
-    fn new(errors: Vec<ValidationError>) -> Self {
-        Self(ErrorList::new(errors))
-    }
-
-    #[must_use]
-    pub fn errors(&self) -> &[Value] {
-        self.0.values()
-    }
-}
+impl Eq for RequestValidationError {}
 
 impl fmt::Display for RequestValidationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.describe(formatter, "request")
+        let count = self.errors.len();
+        let plural = if count == 1 { "" } else { "s" };
+        write!(formatter, "{count} validation error{plural} in the request")
     }
 }
 
 impl std::error::Error for RequestValidationError {}
-
-// FastAPI's ResponseValidationError: what a handler returned does not match what its route declares
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResponseValidationError(ErrorList);
-
-impl ResponseValidationError {
-    pub(crate) fn new(errors: Vec<ValidationError>) -> Self {
-        Self(ErrorList::new(errors))
-    }
-
-    #[must_use]
-    pub fn errors(&self) -> &[Value] {
-        self.0.values()
-    }
-}
-
-impl fmt::Display for ResponseValidationError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.describe(formatter, "response")
-    }
-}
-
-impl std::error::Error for ResponseValidationError {}
 
 struct Detail<'errors>(&'errors [ValidationError]);
 

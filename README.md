@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/eimantaskat/thermite/actions/workflows/ci.yml/badge.svg)](https://github.com/eimantaskat/thermite/actions/workflows/ci.yml)
 
-A FastAPI-style web framework with a Rust core, usable from Rust and, later, from Python.
+A FastAPI-style web framework with a Rust core, usable from Rust.
 
 ## Status
 
@@ -14,7 +14,6 @@ An experimental project in an early state. Not ready for real use, and the API w
 | --- | --- |
 | `thermite-core` | The runtime: server, router, and later validation, errors and OpenAPI, all driven by route descriptions as plain data |
 | `thermite` | Rust front-end that turns Rust handlers into route descriptions |
-| `thermite-py` | Python front-end built with PyO3 (planned) |
 
 ## Development
 

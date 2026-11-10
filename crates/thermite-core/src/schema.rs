@@ -98,6 +98,7 @@ impl Schema {
         }
     }
 
+    // responses are never validated, but a wrong schema would still describe them wrongly
     pub(crate) fn problem(&self) -> Option<SchemaProblem> {
         if let Some(name) = self.duplicate_field() {
             return Some(SchemaProblem::DuplicateField {
@@ -220,8 +221,6 @@ enum Presence {
     // like `x: int | None = None`: may be missing or null
     Optional,
     Default(Value),
-    // made per request by the front-end, so validation leaves a missing one out
-    DefaultFactory,
 }
 
 impl Field {
@@ -247,12 +246,6 @@ impl Field {
     }
 
     #[must_use]
-    pub fn with_default_factory(mut self) -> Self {
-        self.presence = Presence::DefaultFactory;
-        self
-    }
-
-    #[must_use]
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.name = name.into().into();
         self
@@ -273,10 +266,6 @@ impl Field {
 
     pub(crate) fn is_required(&self) -> bool {
         self.presence == Presence::Required
-    }
-
-    pub(crate) fn has_default_factory(&self) -> bool {
-        self.presence == Presence::DefaultFactory
     }
 
     pub(crate) fn invalid_default(&self) -> Option<&str> {

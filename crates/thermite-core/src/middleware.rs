@@ -50,7 +50,7 @@ pub trait Pipeline: Send + Sync + 'static {
     fn endpoint(&self, request: Request) -> impl Future<Output = Response> + Send;
 }
 
-// owns the pipeline, so a middleware can keep it, move it to another task or hand it to Python
+// owns the pipeline, so a middleware can keep it, or move it to another task
 pub struct Next {
     pipeline: Arc<dyn BoxedPipeline>,
     remaining: usize,

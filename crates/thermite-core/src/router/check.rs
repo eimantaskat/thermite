@@ -139,13 +139,6 @@ fn check_parameter(
     let field = parameter.field();
     let name = field.name().to_owned();
     let path = path.to_owned();
-    if field.has_default_factory() {
-        return Err(RouteError::ParameterDefaultFactory {
-            path,
-            location: parameter.location(),
-            name,
-        });
-    }
     let supported = match parameter.location() {
         ParameterLocation::Path if !pattern.has_parameter(&name) => {
             return Err(RouteError::UnknownPathParameter { path, name });
@@ -385,30 +378,6 @@ mod tests {
                 })
             );
         }
-    }
-
-    #[test]
-    fn rejects_a_parameter_with_a_default_factory() {
-        let field = Field::new("tag", Schema::array(Schema::string())).with_default_factory();
-        let description =
-            items("/items").parameter(Parameter::new(ParameterLocation::Query, field));
-
-        assert_eq!(
-            check(&description),
-            Err(RouteError::ParameterDefaultFactory {
-                path: "/items".to_owned(),
-                location: ParameterLocation::Query,
-                name: "tag".to_owned()
-            })
-        );
-        assert_eq!(
-            check(&description).map_err(|error| error.to_string()),
-            Err(concat!(
-                "query parameter `tag` of `/items` cannot have a default factory, ",
-                "which only fields of an object can"
-            )
-            .to_owned())
-        );
     }
 
     #[test]

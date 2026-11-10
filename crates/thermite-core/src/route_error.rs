@@ -33,14 +33,6 @@ pub enum RouteError {
         location: ParameterLocation,
         name: String,
     },
-    #[error(
-        "{location} parameter `{name}` of `{path}` cannot have a default factory, which only fields of an object can"
-    )]
-    ParameterDefaultFactory {
-        path: String,
-        location: ParameterLocation,
-        name: String,
-    },
     #[error("header parameter `{name}` of `{path}` is not a valid header name")]
     InvalidHeaderName { path: String, name: String },
     #[error("an API key of `{path}` is read from `{name}`, which is not a valid header name")]

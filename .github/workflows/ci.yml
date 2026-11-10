@@ -11,7 +11,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  UV_FROZEN: "1"
 
 jobs:
   fmt:
@@ -38,48 +37,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --all-features
 
-  # installs the wheel, so the packaging is tested along with the module
-  python:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        python-version: ["3.11", "3.14"]
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        working-directory: crates/thermite-py
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.0
-        with:
-          python-version: ${{ matrix.python-version }}
-          enable-cache: true
-      - uses: Swatinem/rust-cache@v2
-      - run: uv sync --no-editable
-      - run: uv run --no-sync pytest
-
-  python-check:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: crates/thermite-py
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.3.0
-        with:
-          python-version: "3.14"
-          enable-cache: true
-      - uses: Swatinem/rust-cache@v2
-      - run: uv sync
-      - run: uv run --no-sync ruff format --check .
-      - run: uv run --no-sync ruff check --output-format=github .
-      - run: uv run --no-sync mypy
-      # compares the hand-written stub with the built module
-      - run: uv run --no-sync python -m mypy.stubtest thermite._thermite
-      # before 3.14 coverage cannot see handlers running on tokio's threads
-      - run: uv run --no-sync pytest --cov
-
   # each benchmark runs once, so one that no longer sets up fails here rather than in a timing run
   benches:
     runs-on: ubuntu-latest
@@ -96,20 +53,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov
-      - uses: astral-sh/setup-uv@v10.3.0
-        with:
-          python-version: "3.14"
-          enable-cache: true
-      # one environment for both, since the Python front-end only runs under pytest
-      - run: cargo llvm-cov show-env >> "$GITHUB_ENV"
-      - run: cargo llvm-cov clean --workspace
-      - run: cargo test --workspace --all-features
-      - name: Run pytest
-        working-directory: crates/thermite-py
-        run: |
-          uv sync --no-install-project
-          uv run --no-sync maturin develop
-          uv run --no-sync pytest
+      - run: cargo llvm-cov --workspace --all-features --no-report
       - run: cargo llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex benchmarks
       - name: Write coverage summary
         run: |

@@ -22,7 +22,6 @@ http-body-util = "0.1.5"
 hyper = { version = "1.12.0", default-features = false }
 hyper-util = { version = "0.1.21", default-features = false }
 proc-macro2 = "1.0.107"
-pyo3 = { version = "0.30.1", default-features = false, features = ["macros"] }
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }
 quote = "1.0.47"
 reqwest = { version = "0.13.5", default-features = false }
