@@ -58,8 +58,8 @@ pub use thermite_core::{
     HttpError, InvalidCredentials, Message, Middleware, Next, OpenApiError, Parameter,
     ParameterLocation, Request, RequestValidationError, Response, ResponseDescription,
     RouteDescription, RouteError, Schema, SchemaLocation, SchemaProblem, SecuritySchemeDescription,
-    Server, ServerError, Value, WebSocketDisconnect, read_api_key, read_basic_credentials,
-    read_bearer_credentials, read_bearer_token,
+    Server, ServerError, StaticFiles, Value, WebSocketDisconnect, read_api_key,
+    read_basic_credentials, read_bearer_credentials, read_bearer_token,
 };
 pub use thermite_macros::{
     Model, SecurityScheme, delete, get, head, options, patch, post, put, trace, websocket,

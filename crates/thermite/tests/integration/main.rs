@@ -15,6 +15,7 @@ mod route_attributes;
 mod routers;
 mod security;
 mod state;
+mod static_files;
 mod streaming;
 mod support;
 mod test_client;

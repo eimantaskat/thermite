@@ -1,10 +1,12 @@
 mod check;
 mod extract;
+mod mount;
 mod path;
 mod table;
 
 use std::future::Future;
 use std::panic::resume_unwind;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use http::header::ALLOW;
@@ -18,6 +20,7 @@ use crate::response::internal_server_error;
 use crate::route_error::RouteError;
 use crate::schema::Schema;
 use crate::security::SecuritySchemeDescription;
+use crate::static_files::{self, StaticFiles};
 use crate::validation::validation_failed;
 use crate::websocket::{
     AcceptKey, BoxedWebSocketHandler, WebSocketHandler, check_handshake, is_handshake, open,
@@ -25,6 +28,7 @@ use crate::websocket::{
 };
 use check::{Checked, Inputs, check_description};
 use extract::{BodyRejection, ReadBody, content, extract_arguments, read_body};
+use mount::Mount;
 use path::PathPattern;
 use table::{Lookup, RouteTable};
 
@@ -33,6 +37,8 @@ pub struct Router {
     routes: RouteTable<Route>,
     // like Starlette, a WebSocket route answers only handshakes, which no other route answers
     websockets: RouteTable<WebSocketRoute>,
+    // the deepest first, so a mount inside another answers for its own paths
+    mounts: Vec<Mount>,
 }
 
 // a body this large takes long enough to read that the other requests on its worker would wait for it
@@ -73,6 +79,7 @@ enum Dispatch<'router> {
         Arguments,
         AcceptKey,
     ),
+    Files(&'router Arc<StaticFiles>, Option<PathBuf>),
     // 404, 405 or 422, answered without calling a handler
     Respond(Response),
 }
@@ -82,6 +89,7 @@ impl Default for Router {
         Self {
             routes: RouteTable::new(),
             websockets: RouteTable::new(),
+            mounts: Vec::new(),
         }
     }
 }
@@ -149,6 +157,25 @@ impl Router {
         )
     }
 
+    // answers the paths below it that no route matches, as a Starlette mount after its routes would
+    pub fn mount(&mut self, path: impl Into<String>, files: StaticFiles) -> Result<(), RouteError> {
+        let mount = Mount::new(path.into(), files)?;
+        if self
+            .mounts
+            .iter()
+            .any(|existing| existing.has_segments_of(&mount))
+        {
+            return Err(RouteError::MountConflict {
+                path: mount.path().to_owned(),
+            });
+        }
+        let index = self
+            .mounts
+            .partition_point(|existing| existing.depth() >= mount.depth());
+        self.mounts.insert(index, mount);
+        Ok(())
+    }
+
     pub(crate) fn operations(&self) -> Vec<Operation<'_>> {
         self.routes
             .iter()
@@ -196,11 +223,23 @@ impl Router {
                     Err(errors) => Dispatch::Respond(validation_failed(errors)),
                 }
             }
-            Lookup::MethodNotAllowed { allowed } => Dispatch::Respond(method_not_allowed(&allowed)),
-            Lookup::NotFound => Dispatch::Respond(
-                HttpError::new(StatusCode::NOT_FOUND, "Not Found").into_response(),
-            ),
+            Lookup::MethodNotAllowed { allowed } => self
+                .dispatch_files(request)
+                .unwrap_or_else(|| Dispatch::Respond(method_not_allowed(&allowed))),
+            Lookup::NotFound => self.dispatch_files(request).unwrap_or_else(|| {
+                Dispatch::Respond(
+                    HttpError::new(StatusCode::NOT_FOUND, "Not Found").into_response(),
+                )
+            }),
         }
+    }
+
+    fn dispatch_files(&self, request: &Request) -> Option<Dispatch<'_>> {
+        let path = request.uri().path();
+        self.mounts
+            .iter()
+            .find_map(|mount| mount.find(path))
+            .map(|(files, relative)| Dispatch::Files(files, relative))
     }
 
     // whatever keeps a WebSocket from being accepted answers 403, as uvicorn does
@@ -241,6 +280,9 @@ impl Router {
             }
             Dispatch::WebSocket(handler, arguments, key) => {
                 open(handler, request, arguments, key).await
+            }
+            Dispatch::Files(files, relative) => {
+                static_files::respond(files, &request, relative).await
             }
             Dispatch::Respond(response) => response,
         }
@@ -318,7 +360,7 @@ mod tests {
 
         assert_eq!(
             format!("{router:?}"),
-            "Router { routes: [POST /items], websockets: [] }"
+            "Router { routes: [POST /items], websockets: [], mounts: [] }"
         );
     }
 
@@ -342,7 +384,7 @@ mod tests {
         );
         assert_eq!(
             format!("{router:?}"),
-            "Router { routes: [], websockets: [] }"
+            "Router { routes: [], websockets: [], mounts: [] }"
         );
     }
 }

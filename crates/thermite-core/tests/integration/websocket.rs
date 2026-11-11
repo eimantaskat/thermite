@@ -433,7 +433,7 @@ async fn http_and_websocket_routes_share_a_path_but_not_a_table() -> TestResult 
     assert!(matches!(bad_prefix, Err(RouteError::InvalidPrefix { .. })));
     assert_eq!(
         format!("{router:?}"),
-        "Router { routes: [GET /chat], websockets: [GET /chat] }"
+        "Router { routes: [GET /chat], websockets: [GET /chat], mounts: [] }"
     );
     let server = InProcessServer::start(router).await?;
     let page = server

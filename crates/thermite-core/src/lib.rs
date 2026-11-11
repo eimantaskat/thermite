@@ -16,6 +16,7 @@ mod router;
 mod schema;
 mod security;
 mod server;
+mod static_files;
 mod upload;
 mod validation;
 mod websocket;
@@ -40,6 +41,7 @@ pub use security::{
 };
 pub use serde_json::Value;
 pub use server::{InProcessServer, InProcessWebSocket, Server, ServerError, WebSocketHandshake};
+pub use static_files::StaticFiles;
 pub use upload::{UploadedFile, UploadedFiles};
 pub use validation::RequestValidationError;
 pub use websocket::{

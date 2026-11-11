@@ -6,7 +6,7 @@ use std::sync::Arc;
 use http::Method;
 use thermite_core::{
     Docs, Middleware, MiddlewareStack, Next, OpenApi, Pipeline, Request, RequestHandler,
-    RequestValidationError, Response, RouteError,
+    RequestValidationError, Response, RouteError, StaticFiles,
 };
 use tokio::sync::OnceCell;
 
@@ -147,8 +147,24 @@ impl App {
         Ok(self)
     }
 
+    // routes come first wherever they were added, so a mount at `/` serves what no route answers
+    pub fn mount(
+        mut self,
+        path: impl Into<String>,
+        files: StaticFiles,
+    ) -> Result<Self, RouteError> {
+        self.router.mount(path, files)?;
+        Ok(self)
+    }
+
     pub fn include_router(self, router: Router) -> Result<Self, RouteError> {
-        self.routes(router.into_routes())
+        let (included, mounts) = router.into_parts();
+        mounts
+            .into_iter()
+            .try_fold(self.routes(included)?, |app, mount| match mount.invalid {
+                Some(error) => Err(error),
+                None => app.mount(mount.path, mount.files),
+            })
     }
 }
 

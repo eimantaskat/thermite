@@ -1,4 +1,5 @@
 use std::fmt;
+use std::path::PathBuf;
 
 use http::{Method, StatusCode};
 
@@ -75,6 +76,15 @@ pub enum RouteError {
     WebSocketMethod { method: Method, path: String },
     #[error("the WebSocket route `{path}` declares a body, which a handshake does not have")]
     WebSocketBody { path: String },
+    #[error("the mount path `{path}` must start with `/` and hold no parameter or empty segment")]
+    InvalidMountPath { path: String },
+    #[error("static files are mounted at `{path}` more than once")]
+    MountConflict { path: String },
+    #[error(
+        "the static files mounted at `{path}` come from `{}`, which is not a directory",
+        .directory.display()
+    )]
+    StaticDirectory { path: String, directory: PathBuf },
     #[error("{method} `{path}` matches the same requests as the route `{existing}`")]
     Conflict {
         method: Method,

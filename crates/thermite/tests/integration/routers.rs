@@ -141,6 +141,6 @@ fn debug_output_shows_prefix_tags_and_routes() {
 
     assert_eq!(
         format!("{router:?}"),
-        r#"Router { prefix: "/items", tags: ["items"], routes: [PUT /{item_id}] }"#
+        r#"Router { prefix: "/items", tags: ["items"], routes: [PUT /{item_id}], mounts: [] }"#
     );
 }

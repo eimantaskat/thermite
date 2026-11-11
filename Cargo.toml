@@ -21,6 +21,8 @@ http = "1.5.0"
 flate2 = { version = "1.1.11", default-features = false, features = ["rust_backend", "runtime_detection"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
 http-body-util = "0.1.5"
+# HTTP dates for StaticFiles' Last-Modified, already built for hyper
+httpdate = "1.0.3"
 # parses multipart/form-data, as axum does
 multer = { version = "3.1.0", default-features = false }
 hyper = { version = "1.12.0", default-features = false }
