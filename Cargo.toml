@@ -17,6 +17,8 @@ bytes = "1.12.1"
 # async_tokio for awaiting in benchmarks; plotters and rayon only draw charts and analyse in parallel
 criterion = { version = "0.8.2", default-features = false, features = ["async_tokio", "cargo_bench_support"] }
 http = "1.5.0"
+# gzip for GZipMiddleware, on the pure-Rust miniz_oxide backend
+flate2 = { version = "1.1.11", default-features = false, features = ["rust_backend", "runtime_detection"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["sink"] }
 http-body-util = "0.1.5"
 # parses multipart/form-data, as axum does

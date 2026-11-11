@@ -20,6 +20,7 @@ tracing.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
+flate2.workspace = true
 proptest.workspace = true
 reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }

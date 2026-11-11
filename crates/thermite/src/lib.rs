@@ -53,12 +53,13 @@ pub use test_client::{
     TestWebSocket, TestWebSocketError, TestWebSocketRequest,
 };
 pub use thermite_core::{
-    ApiKeyLocation, Arguments, BackgroundTasks, Body, BodyError, BoxError, CloseCode, Field,
-    HttpAuthorizationCredentials, HttpBasicCredentials, HttpError, InvalidCredentials, Message,
-    Middleware, Next, OpenApiError, Parameter, ParameterLocation, Request, RequestValidationError,
-    Response, ResponseDescription, RouteDescription, RouteError, Schema, SchemaLocation,
-    SchemaProblem, SecuritySchemeDescription, Server, ServerError, Value, WebSocketDisconnect,
-    read_api_key, read_basic_credentials, read_bearer_credentials, read_bearer_token,
+    ApiKeyLocation, Arguments, BackgroundTasks, Body, BodyError, BoxError, CloseCode,
+    CorsMiddleware, Field, GZipMiddleware, HttpAuthorizationCredentials, HttpBasicCredentials,
+    HttpError, InvalidCredentials, Message, Middleware, Next, OpenApiError, Parameter,
+    ParameterLocation, Request, RequestValidationError, Response, ResponseDescription,
+    RouteDescription, RouteError, Schema, SchemaLocation, SchemaProblem, SecuritySchemeDescription,
+    Server, ServerError, Value, WebSocketDisconnect, read_api_key, read_basic_credentials,
+    read_bearer_credentials, read_bearer_token,
 };
 pub use thermite_macros::{
     Model, SecurityScheme, delete, get, head, options, patch, post, put, trace, websocket,

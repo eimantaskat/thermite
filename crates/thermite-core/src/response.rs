@@ -18,8 +18,12 @@ pub(crate) fn json_response(status: StatusCode, body: impl Into<Bytes>) -> Respo
 }
 
 pub(crate) fn internal_server_error() -> Response {
-    let mut response = Response::new("Internal Server Error".into());
-    *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+    plain_text(StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+}
+
+pub(crate) fn plain_text(status: StatusCode, text: impl Into<Body>) -> Response {
+    let mut response = Response::new(text.into());
+    *response.status_mut() = status;
     response.headers_mut().insert(
         CONTENT_TYPE,
         HeaderValue::from_static("text/plain; charset=utf-8"),

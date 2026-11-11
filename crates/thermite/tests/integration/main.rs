@@ -1,11 +1,13 @@
 mod app;
 mod background_tasks;
 mod body_decoding;
+mod cors;
 mod dependencies;
 mod derive;
 mod exceptions;
 mod extractors;
 mod forms;
+mod gzip;
 mod middleware;
 mod openapi;
 mod responses;

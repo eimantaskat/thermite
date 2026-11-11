@@ -27,7 +27,7 @@ pub use decoder::BodyDecoder;
 pub use description::{Parameter, ParameterLocation, ResponseDescription, RouteDescription};
 pub use handler::{Request, RequestHandler, Response, RouteHandler};
 pub use http_error::HttpError;
-pub use middleware::{Middleware, MiddlewareStack, Next, Pipeline};
+pub use middleware::{CorsMiddleware, GZipMiddleware, Middleware, MiddlewareStack, Next, Pipeline};
 pub use openapi::{Docs, OpenApi, OpenApiError};
 pub use response::{attach_error, response_error};
 pub use route_error::{RouteError, SchemaLocation, SchemaProblem};

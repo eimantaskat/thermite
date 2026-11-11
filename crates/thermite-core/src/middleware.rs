@@ -5,6 +5,13 @@ use std::sync::Arc;
 use crate::handler::{BoxedResponseFuture, Request, Response};
 use crate::websocket::is_handshake;
 
+mod cors;
+mod gzip;
+mod vary;
+
+pub use cors::CorsMiddleware;
+pub use gzip::GZipMiddleware;
+
 pub trait Middleware: Send + Sync + 'static {
     fn call(&self, request: Request, next: Next) -> impl Future<Output = Response> + Send;
 }
