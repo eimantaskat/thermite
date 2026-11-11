@@ -1,0 +1,48 @@
+name: Docs
+
+# the snippets the pages include are tested by the test job in ci.yml, as part of the workspace
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: mdbook@0.5.4
+      - run: bash docs/check-includes.sh
+      # mdbook logs a file it cannot include and still exits 0
+      - run: |
+          mdbook build docs 2>&1 | tee mdbook.log
+          ! grep -E '(ERROR|WARN) ' mdbook.log
+      # links inside the book only; 404.html links from the site root, which exists only once deployed
+      - uses: lycheeverse/lychee-action@v2
+        with:
+          args: --offline --include-fragments --no-progress --exclude-path '404\.html$' 'docs/book/**/*.html'
+          fail: true
+      - if: github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs/book
+
+  deploy:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

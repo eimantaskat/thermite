@@ -1,0 +1,19 @@
+[package]
+name = "docs_src"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# each file in src/bin is the whole program a page shows, with its tests beside it
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+thermite.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

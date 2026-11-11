@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "docs_src"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,6 +10,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/eimantaskat/thermite"
 
 [workspace.dependencies]
+thermite = { path = "crates/thermite" }
 thermite-core = { path = "crates/thermite-core" }
 thermite-macros = { path = "crates/thermite-macros" }
 base64 = { version = "0.23.1", default-features = false, features = ["alloc"] }

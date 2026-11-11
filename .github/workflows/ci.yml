@@ -54,11 +54,12 @@ jobs:
         with:
           tool: cargo-llvm-cov
       - run: cargo llvm-cov --workspace --all-features --no-report
-      - run: cargo llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex benchmarks
+      # a guide snippet's main serves forever, and its tests check the page rather than the library
+      - run: cargo llvm-cov report --lcov --output-path lcov.info --ignore-filename-regex 'benchmarks|docs_src'
       - name: Write coverage summary
         run: |
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          cargo llvm-cov report --summary-only --ignore-filename-regex benchmarks >> "$GITHUB_STEP_SUMMARY"
+          cargo llvm-cov report --summary-only --ignore-filename-regex 'benchmarks|docs_src' >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:

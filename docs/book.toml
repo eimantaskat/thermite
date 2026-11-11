@@ -1,0 +1,18 @@
+[book]
+title = "Thermite"
+description = "A FastAPI-style web framework for Rust"
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+# the project site lives under /thermite/ on GitHub Pages, which the 404 page links from
+site-url = "/thermite/"
+git-repository-url = "https://github.com/eimantaskat/thermite"
+edit-url-template = "https://github.com/eimantaskat/thermite/edit/main/docs/{path}"
+
+# snippets depend on thermite, which the Rust playground does not have
+[output.html.playground]
+runnable = false
