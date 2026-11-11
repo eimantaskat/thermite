@@ -108,4 +108,4 @@ The same app can be tested without opening a port:
 ```
 
 `cargo test` runs it.
-`TestClient` is the counterpart of FastAPI's, and a later page of the tutorial covers it fully.
+`TestClient` is the counterpart of FastAPI's, and [Testing](testing.md) covers it fully.
