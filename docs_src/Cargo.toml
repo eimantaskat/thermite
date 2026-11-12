@@ -8,11 +8,13 @@ publish = false
 
 # each file in src/bin is the whole program a page shows, with its tests beside it
 [dependencies]
+futures-util.workspace = true
 serde = { workspace = true, features = ["derive"] }
 thermite.workspace = true
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 
 [dev-dependencies]
+reqwest.workspace = true
 serde_json.workspace = true
 
 [lints]
