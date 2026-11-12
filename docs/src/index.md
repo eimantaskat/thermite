@@ -31,9 +31,10 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 There are no releases yet: this follows `main`, which this guide is built from, and `cargo update -p thermite` brings a project up to it.
 
-Then go on to [First steps](tutorial/first-steps.md).
+Then go on to [First steps](tutorial/first-steps.md), or, new to Rust, start with [Rust types intro](learn/rust-types.md).
 
 ## Coming from FastAPI
 
 The names follow FastAPI's where they can: `Depends`, `Query`, `Header`, `TestClient`, `StaticFiles`, `BackgroundTasks`.
 Where Python reads a parameter's type hint, Thermite reads a Rust type: a struct that derives `Model` plays the part of a Pydantic model.
+[FastAPI to Thermite](learn/fastapi-to-thermite.md) puts the names side by side, and [Differences from FastAPI](learn/differences.md) lists where the behaviour differs.

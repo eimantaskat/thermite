@@ -2,6 +2,14 @@
 
 [Thermite](index.md)
 
+# Coming from Python
+
+- [Rust types intro](learn/rust-types.md)
+- [Rust in a handler](learn/rust-in-a-handler.md)
+- [Concurrency and async](learn/concurrency.md)
+- [FastAPI to Thermite](learn/fastapi-to-thermite.md)
+- [Differences from FastAPI](learn/differences.md)
+
 # Tutorial
 
 - [First steps](tutorial/first-steps.md)
